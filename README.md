@@ -12,7 +12,7 @@ Stack
 Ports
 -----
 - Frontend: http://localhost:5173
-- Backend: http://localhost:8000
+- Backend: http://localhost:8081
 - Apache: http://localhost:8080
 - MySQL: localhost:3310
 
@@ -42,9 +42,9 @@ Backend Setup
    - `DB_PORT=3310`
    - `DB_NAME=attendance_db`
 4) Run the API:
-   - `uvicorn app.main:app --reload --port 8000 --app-dir backend`
+   - `uvicorn app.main:app --reload --port 8081 --app-dir backend`
 5) API docs:
-   - `http://localhost:8000/docs`
+   - `http://localhost:8081/docs`
 
 Frontend Setup
 --------------
@@ -70,7 +70,7 @@ Implementation Notes
 
 Common Commands
 ---------------
-- Backend: `uvicorn app.main:app --reload --port 8000 --app-dir backend`
+- Backend: `uvicorn app.main:app --reload --port 8081 --app-dir backend`
 - Frontend: `cd frontend && npm run dev`
 
 Windows Shortcuts (.bat)

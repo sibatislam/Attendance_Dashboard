@@ -24,7 +24,7 @@ if "%VENV_PY%"=="3.14" (
 
 call .venv\Scripts\activate
 
-set PORT=8000
+set PORT=8081
 for /f "tokens=2 delims==" %%A in ('findstr /B /C:"BACKEND_PORT=" backend\.env 2^>nul') do set PORT=%%A
 
 echo [Backend] Installing/Updating backend requirements...
@@ -35,6 +35,6 @@ pip install --upgrade --upgrade-strategy eager -r backend\requirements.txt || (
 )
 
 echo [Backend] Starting API on port %PORT% ...
-python -m uvicorn app.main:app --reload --port %PORT% --app-dir backend
+python -m uvicorn app.main:app --reload --port %PORT% --host 0.0.0.0 --app-dir backend
 
 

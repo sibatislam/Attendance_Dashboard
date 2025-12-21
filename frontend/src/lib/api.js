@@ -4,10 +4,38 @@ import { computeWorkHourCompletion } from './workHour'
 import { computeWorkHourLost } from './workHourLost'
 import { computeLeaveAnalysis } from './leaveAnalysis'
 
-export const API_BASE = 'http://127.0.0.1:8000'
+// Auto-detect API base URL: use localhost if accessing locally, otherwise use server IP
+// This allows the app to work both locally and from other PCs on the network
+const getApiBase = () => {
+  // Allow override via environment variable
+  if (import.meta.env.VITE_API_BASE) {
+    console.log('[API] Using VITE_API_BASE:', import.meta.env.VITE_API_BASE)
+    return import.meta.env.VITE_API_BASE
+  }
+  
+  // Auto-detect: if accessing via localhost, use localhost for API
+  // Otherwise use the server IP
+  const hostname = window.location.hostname
+  console.log('[API] Detected hostname:', hostname)
+  
+  if (hostname === 'localhost' || hostname === '127.0.0.1') {
+    const apiBase = 'http://localhost:8081'
+    console.log('[API] Using localhost API:', apiBase)
+    return apiBase
+  }
+  
+  // Default to server IP for network access
+  const apiBase = 'http://172.16.50.50:8081'
+  console.log('[API] Using server IP API:', apiBase)
+  return apiBase
+}
+
+export const API_BASE = getApiBase()
+console.log('[API] Final API_BASE:', API_BASE)
 
 export const api = axios.create({
   baseURL: API_BASE,
+  timeout: 30000, // 30 seconds timeout
 })
 
 // Add token to requests if available
@@ -241,6 +269,45 @@ export async function getTeamsCompanyActivity(teamsFileId, employeeFileId) {
   if (employeeFileId) params.employee_file_id = employeeFileId
   const { data } = await api.get('/teams/analytics/company-activity', { params })
   return data
+}
+
+export async function getTeamsCXOActivity(fileId) {
+  const params = {}
+  if (fileId) params.file_id = fileId
+  const { data } = await api.get('/teams/analytics/cxo-activity', { params })
+  return data
+}
+
+// ===== CXO Management APIs =====
+
+export async function listCXOUsers() {
+  const { data } = await api.get('/cxo/')
+  return data
+}
+
+export async function listEmployeesWithCXOStatus(employeeFileId) {
+  const params = {}
+  if (employeeFileId) params.employee_file_id = employeeFileId
+  const { data } = await api.get('/cxo/employees', { params })
+  return data
+}
+
+export async function markEmployeeAsCXO(email) {
+  const { data } = await api.post('/cxo/mark', { email })
+  return data
+}
+
+export async function unmarkEmployeeAsCXO(email) {
+  await api.delete(`/cxo/unmark/${encodeURIComponent(email)}`)
+}
+
+export async function addCXOUser(email) {
+  const { data } = await api.post('/cxo/', { email })
+  return data
+}
+
+export async function removeCXOUser(cxoId) {
+  await api.delete(`/cxo/${cxoId}`)
 }
 
 // ===== Employee List APIs =====

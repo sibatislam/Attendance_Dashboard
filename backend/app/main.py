@@ -18,6 +18,7 @@ from .routers.teams_app_files import router as teams_app_files_router
 from .routers.teams_app_analytics import router as teams_app_analytics_router
 from .routers.employee_upload import router as employee_upload_router
 from .routers.employee_files import router as employee_files_router
+from .routers.cxo import router as cxo_router
 
 # Import auth routers with error handling
 try:
@@ -78,6 +79,9 @@ def create_app() -> FastAPI:
         # Employee List module routers
         app.include_router(employee_upload_router, prefix="/employee/upload", tags=["employee"])
         app.include_router(employee_files_router, prefix="/employee/files", tags=["employee"])
+        
+        # CXO Management router
+        app.include_router(cxo_router, prefix="/cxo", tags=["cxo"])
 
     @app.get("/health")
     def health():

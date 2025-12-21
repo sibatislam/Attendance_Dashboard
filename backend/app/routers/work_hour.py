@@ -19,26 +19,9 @@ def work_hour_completion(
     group_by: Literal["function", "company", "location"],
     db: Session = Depends(get_db),
 ) -> List[Dict[str, Any]]:
-    # Try pre-calculated data first (fast!)
-    rows = db.query(WorkHourKPI).filter(WorkHourKPI.group_by == group_by).all()
-    
-    if rows:
-        return [
-            {
-                "month": r.month,
-                "group": r.group_value,
-                "members": r.members,
-                "present": r.present,
-                "od": r.od,
-                "shift_hours": float(r.shift_hours),
-                "work_hours": float(r.work_hours),
-                "completed": r.completed,
-                "completion_pct": float(r.completion_pct),
-            }
-            for r in rows
-        ]
-    
-    # Fallback to on-the-fly calculation
+    # Always use on-the-fly calculation for accurate unique member counting
+    # Pre-calculated tables store per-file data, but we need accurate aggregation
+    # across all files for the same month/group combination
     try:
         return compute_work_hour_completion(db, group_by)
     except ValueError as e:
@@ -51,26 +34,9 @@ def work_hour_lost(
     group_by: Literal["function", "company", "location"],
     db: Session = Depends(get_db),
 ) -> List[Dict[str, Any]]:
-    # Try pre-calculated data first (fast!)
-    rows = db.query(WorkHourLostKPI).filter(WorkHourLostKPI.group_by == group_by).all()
-    
-    if rows:
-        return [
-            {
-                "month": r.month,
-                "group": r.group_value,
-                "members": r.members,
-                "present": r.present,
-                "od": r.od,
-                "shift_hours": float(r.shift_hours),
-                "work_hours": float(r.work_hours),
-                "lost": float(r.lost_hours),
-                "lost_pct": float(r.lost_pct),
-            }
-            for r in rows
-        ]
-    
-    # Fallback to on-the-fly calculation
+    # Always use on-the-fly calculation for accurate unique member counting
+    # Pre-calculated tables store per-file data, but we need accurate aggregation
+    # across all files for the same month/group combination
     try:
         return compute_work_hour_lost(db, group_by)
     except ValueError as e:
@@ -83,31 +49,9 @@ def leave_analysis(
     group_by: Literal["function", "company", "location"],
     db: Session = Depends(get_db),
 ) -> List[Dict[str, Any]]:
-    # Try pre-calculated data first (fast!)
-    rows = db.query(LeaveAnalysisKPI).filter(LeaveAnalysisKPI.group_by == group_by).all()
-    
-    if rows:
-        return [
-            {
-                "month": r.month,
-                "group": r.group_value,
-                "members": r.members,
-                "total_sl": r.total_sl,
-                "total_cl": r.total_cl,
-                "workdays": r.workdays,
-                "total_a": r.total_a,
-                "sl_adjacent_w": r.sl_adjacent_w,
-                "cl_adjacent_w": r.cl_adjacent_w,
-                "sl_adjacent_h": r.sl_adjacent_h,
-                "cl_adjacent_h": r.cl_adjacent_h,
-                "sl_pct": float(r.sl_pct),
-                "cl_pct": float(r.cl_pct),
-                "a_pct": float(r.a_pct),
-            }
-            for r in rows
-        ]
-    
-    # Fallback to on-the-fly calculation
+    # Always use on-the-fly calculation for accurate unique member counting
+    # Pre-calculated tables store per-file data, but we need accurate aggregation
+    # across all files for the same month/group combination
     try:
         return compute_leave_analysis(db, group_by)
     except ValueError as e:

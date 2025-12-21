@@ -19,25 +19,9 @@ def on_time(
     group_by: Literal["function", "company", "location"],
     db: Session = Depends(get_db),
 ) -> List[Dict[str, Any]]:
-    # Try to read from pre-calculated KPI tables first (fast!)
-    rows = db.query(OnTimeKPI).filter(OnTimeKPI.group_by == group_by).all()
-    
-    if rows:
-        # Return pre-calculated data (instant!)
-        return [
-            {
-                "month": r.month,
-                "group": r.group_value,
-                "members": r.members,
-            "present": r.present,
-            "late": r.late,
-            "on_time": r.on_time,
-            "on_time_pct": float(r.on_time_pct) if isinstance(r.on_time_pct, str) else r.on_time_pct,
-        }
-        for r in rows
-    ]
-    
-    # Fallback to on-the-fly calculation if no pre-calculated data
+    # Always use on-the-fly calculation for accurate unique member counting
+    # Pre-calculated tables store per-file data, but we need accurate aggregation
+    # across all files for the same month/group combination
     return compute_on_time_stats(db, group_by)
 
 

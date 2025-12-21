@@ -96,6 +96,12 @@ def compute_work_hour_lost(db: Session, group_by: str) -> List[Dict[str, Any]]:
         "company": "Comapny Name",
         "location": "Job Location",
     }
+    # Fallback map for common column name variations
+    fallback_map = {
+        "company": ["Company Name", "Comapny Name", "Company"],
+        "location": ["Job Location", "Location", "Work Location"],
+    }
+    
     group_key = key_map.get(group_by)
     if not group_key:
         raise ValueError("Invalid group_by")
@@ -113,10 +119,13 @@ def compute_work_hour_lost(db: Session, group_by: str) -> List[Dict[str, Any]]:
         if not isinstance(r, dict):
             continue
         month = _extract_month(str(r.get("Attendance Date", "")))
+        if not month:  # Skip rows without valid month
+            continue
         
         # For function-wise, combine Company - Function
         if group_by == "function":
-            company_name = str(r.get("Comapny Name", "")).strip()
+            # Try both "Company Name" and "Comapny Name"
+            company_name = str(r.get("Company Name", "") or r.get("Comapny Name", "")).strip()
             function_name = str(r.get("Function Name", "")).strip()
             company_short = _get_company_short_name(company_name)
             if company_short and function_name:
@@ -126,7 +135,17 @@ def compute_work_hour_lost(db: Session, group_by: str) -> List[Dict[str, Any]]:
             else:
                 group_val = company_short or "Unknown"
         else:
-            group_val = str(r.get(group_key, ""))
+            # Try primary key first, then fallback variations
+            group_val = str(r.get(group_key, "")).strip()
+            if not group_val and group_by in fallback_map:
+                for fallback_key in fallback_map[group_by]:
+                    if fallback_key != group_key:
+                        group_val = str(r.get(fallback_key, "")).strip()
+                        if group_val:
+                            break
+            # Skip rows with empty group values for company/location
+            if not group_val or group_val == "":
+                continue
         
         emp_code = str(r.get("Employee Code", "")).strip()
         emp_name = str(r.get("Name", "")).strip()

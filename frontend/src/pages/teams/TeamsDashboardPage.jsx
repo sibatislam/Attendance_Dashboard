@@ -1,13 +1,13 @@
-﻿import { useState, useMemo, useRef } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { listTeamsFiles, listEmployeeFiles, getTeamsUserActivity, getTeamsFunctionActivity, getTeamsCompanyActivity } from '../../lib/api'
+import { useState, useMemo, useRef } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { listTeamsFiles, listEmployeeFiles, getTeamsUserActivity, getTeamsFunctionActivity, getTeamsCompanyActivity, getTeamsCXOActivity, listCXOUsers, listEmployeesWithCXOStatus, markEmployeeAsCXO, unmarkEmployeeAsCXO } from '../../lib/api'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, CartesianGrid, LabelList, Cell } from 'recharts'
 import ActivityBar from '../../components/ActivityBar'
 import html2canvas from 'html2canvas'
 import jsPDF from 'jspdf'
 
 export default function TeamsDashboardPage() {
-  const [activeTab, setActiveTab] = useState('user') // user, function, company
+  const [activeTab, setActiveTab] = useState('user') // user, function, company, cxo
   const [selectedFileId, setSelectedFileId] = useState(null)
   const [selectedEmployeeFileId, setSelectedEmployeeFileId] = useState(null)
   const [selectedUser, setSelectedUser] = useState('')
@@ -16,7 +16,11 @@ export default function TeamsDashboardPage() {
   const [groupCompareMode, setGroupCompareMode] = useState(false) // For function/company comparison
   const [groupCompareFileId, setGroupCompareFileId] = useState(null)
   const [isExporting, setIsExporting] = useState(false)
+  const [showCXOManagement, setShowCXOManagement] = useState(false)
+  const [selectedEmployeeFileForCXO, setSelectedEmployeeFileForCXO] = useState(null)
+  const [cxoSearchQuery, setCxoSearchQuery] = useState('')
   const chartRef = useRef(null)
+  const queryClient = useQueryClient()
 
   const { data: files = [], isLoading: isLoadingFiles } = useQuery({
     queryKey: ['teams_files'],
@@ -93,7 +97,157 @@ export default function TeamsDashboardPage() {
     cacheTime: 10 * 60 * 1000,
   })
 
-  const isLoading = isLoadingFiles || isLoadingEmployeeFiles || isLoadingData || (compareMode && isLoadingCompare) || isLoadingFunction || isLoadingCompany || isLoadingFunctionCompare || isLoadingCompanyCompare
+  // CXO data queries
+  const { data: cxoData = [], isLoading: isLoadingCXO } = useQuery({
+    queryKey: ['teams_cxo_activity', selectedFileId],
+    queryFn: () => getTeamsCXOActivity(selectedFileId),
+    enabled: activeTab === 'cxo' && files.length > 0,
+    staleTime: 5 * 60 * 1000,
+    cacheTime: 10 * 60 * 1000,
+  })
+
+  const { data: cxoCompareData = [], isLoading: isLoadingCXOCompare } = useQuery({
+    queryKey: ['teams_cxo_activity_compare', compareFileId],
+    queryFn: () => getTeamsCXOActivity(compareFileId),
+    enabled: activeTab === 'cxo' && compareMode && compareFileId !== null,
+    staleTime: 5 * 60 * 1000,
+    cacheTime: 10 * 60 * 1000,
+  })
+
+  const { data: cxoUsers = [], isLoading: isLoadingCXOUsers } = useQuery({
+    queryKey: ['cxo_users'],
+    queryFn: listCXOUsers,
+    enabled: activeTab === 'cxo',
+    staleTime: 5 * 60 * 1000,
+    cacheTime: 10 * 60 * 1000,
+  })
+
+  const { data: employeesWithCXO = [], isLoading: isLoadingEmployees } = useQuery({
+    queryKey: ['employees_with_cxo', selectedEmployeeFileForCXO],
+    queryFn: () => listEmployeesWithCXOStatus(selectedEmployeeFileForCXO),
+    enabled: activeTab === 'cxo' && showCXOManagement && employeeFiles.length > 0,
+    staleTime: 5 * 60 * 1000,
+    cacheTime: 10 * 60 * 1000,
+  })
+
+  // CXO mutations with optimistic updates
+  const markCXOMutation = useMutation({
+    mutationFn: markEmployeeAsCXO,
+    onMutate: async (email) => {
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries(['employees_with_cxo'])
+      
+      // Snapshot previous value
+      const previousEmployees = queryClient.getQueryData(['employees_with_cxo', selectedEmployeeFileForCXO])
+      
+      // Optimistically update to the new value
+      queryClient.setQueryData(['employees_with_cxo', selectedEmployeeFileForCXO], (old) => {
+        if (!old) return old
+        return old.map(emp => 
+          emp.email.toLowerCase() === email.toLowerCase() 
+            ? { ...emp, is_cxo: true }
+            : emp
+        )
+      })
+      
+      return { previousEmployees }
+    },
+    onSuccess: () => {
+      // Silently refetch to ensure consistency (don't show alerts on success)
+      queryClient.invalidateQueries(['cxo_users'])
+      queryClient.invalidateQueries(['employees_with_cxo'])
+      queryClient.invalidateQueries(['teams_cxo_activity'])
+    },
+    onError: (error, email, context) => {
+      console.error('Mark CXO error:', error)
+      
+      // For network errors, don't rollback immediately - the operation might have succeeded
+      // Just invalidate to check server state
+      if (!error.response) {
+        // Network error - operation might have succeeded on server
+        // Silently check server state by invalidating queries
+        queryClient.invalidateQueries(['employees_with_cxo'])
+        queryClient.invalidateQueries(['cxo_users'])
+        // Don't show alert - let the optimistic update stay, server will correct if needed
+        return
+      }
+      
+      // Rollback only for actual server errors (not network timeouts)
+      if (context?.previousEmployees && error.response?.status >= 400) {
+        queryClient.setQueryData(['employees_with_cxo', selectedEmployeeFileForCXO], context.previousEmployees)
+      }
+      
+      // Only show alerts for actual server errors
+      if (error.response?.status === 403) {
+        alert('Access denied: Admin privileges required to mark employees as CXO')
+      } else if (error.response?.status === 401) {
+        alert('Authentication required. Please log in again.')
+      } else if (error.response?.status >= 400) {
+        const errorMessage = error.response?.data?.detail || error.message || 'Failed to mark employee as CXO'
+        alert(`Error: ${errorMessage}`)
+      }
+    }
+  })
+
+  const unmarkCXOMutation = useMutation({
+    mutationFn: unmarkEmployeeAsCXO,
+    onMutate: async (email) => {
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries(['employees_with_cxo'])
+      
+      // Snapshot previous value
+      const previousEmployees = queryClient.getQueryData(['employees_with_cxo', selectedEmployeeFileForCXO])
+      
+      // Optimistically update to the new value
+      queryClient.setQueryData(['employees_with_cxo', selectedEmployeeFileForCXO], (old) => {
+        if (!old) return old
+        return old.map(emp => 
+          emp.email.toLowerCase() === email.toLowerCase() 
+            ? { ...emp, is_cxo: false }
+            : emp
+        )
+      })
+      
+      return { previousEmployees }
+    },
+    onSuccess: () => {
+      // Silently refetch to ensure consistency (don't show alerts on success)
+      queryClient.invalidateQueries(['cxo_users'])
+      queryClient.invalidateQueries(['employees_with_cxo'])
+      queryClient.invalidateQueries(['teams_cxo_activity'])
+    },
+    onError: (error, email, context) => {
+      console.error('Unmark CXO error:', error)
+      
+      // For network errors, don't rollback immediately - the operation might have succeeded
+      // Just invalidate to check server state
+      if (!error.response) {
+        // Network error - operation might have succeeded on server
+        // Silently check server state by invalidating queries
+        queryClient.invalidateQueries(['employees_with_cxo'])
+        queryClient.invalidateQueries(['cxo_users'])
+        // Don't show alert - let the optimistic update stay, server will correct if needed
+        return
+      }
+      
+      // Rollback only for actual server errors (not network timeouts)
+      if (context?.previousEmployees && error.response?.status >= 400) {
+        queryClient.setQueryData(['employees_with_cxo', selectedEmployeeFileForCXO], context.previousEmployees)
+      }
+      
+      // Only show alerts for actual server errors
+      if (error.response?.status === 403) {
+        alert('Access denied: Admin privileges required to unmark employees as CXO')
+      } else if (error.response?.status === 401) {
+        alert('Authentication required. Please log in again.')
+      } else if (error.response?.status >= 400) {
+        const errorMessage = error.response?.data?.detail || error.message || 'Failed to unmark employee as CXO'
+        alert(`Error: ${errorMessage}`)
+      }
+    }
+  })
+
+  const isLoading = isLoadingFiles || isLoadingEmployeeFiles || isLoadingData || (compareMode && isLoadingCompare) || isLoadingFunction || isLoadingCompany || isLoadingFunctionCompare || isLoadingCompanyCompare || isLoadingCXO || isLoadingCXOCompare || isLoadingCXOUsers || isLoadingEmployees
 
   // Get unique users for dropdown
   const uniqueUsers = useMemo(() => {
@@ -108,6 +262,179 @@ export default function TeamsDashboardPage() {
     }
     return Array.from(users).sort()
   }, [userData, compareData, compareMode])
+
+  // CXO data processing - group by individual user
+  const cxoUserData = useMemo(() => {
+    if (cxoData.length === 0) return []
+    
+    // Group by user email
+    const userMap = {}
+    cxoData.forEach(u => {
+      const email = u.user || u.email || 'Unknown'
+      if (!userMap[email]) {
+        userMap[email] = {
+          user: email,
+          'Team Chat': 0,
+          'Private Chat': 0,
+          'Calls': 0,
+          'Meetings Org': 0,
+          'Meetings Att': 0,
+          'One-time Org': 0,
+          'One-time Att': 0,
+          'Recurring Org': 0,
+          'Recurring Att': 0,
+          'Post Messages': 0,
+        }
+      }
+      userMap[email]['Team Chat'] += u['Team Chat'] || 0
+      userMap[email]['Private Chat'] += u['Private Chat'] || 0
+      userMap[email]['Calls'] += u['Calls'] || 0
+      userMap[email]['Meetings Org'] += u['Meetings Org'] || 0
+      userMap[email]['Meetings Att'] += u['Meetings Att'] || 0
+      userMap[email]['One-time Org'] += u['One-time Org'] || 0
+      userMap[email]['One-time Att'] += u['One-time Att'] || 0
+      userMap[email]['Recurring Org'] += u['Recurring Org'] || 0
+      userMap[email]['Recurring Att'] += u['Recurring Att'] || 0
+      userMap[email]['Post Messages'] += u['Post Messages'] || 0
+    })
+    
+    return Object.values(userMap).sort((a, b) => a.user.localeCompare(b.user))
+  }, [cxoData])
+
+  const cxoCompareUserData = useMemo(() => {
+    if (cxoCompareData.length === 0) return []
+    
+    // Group by user email
+    const userMap = {}
+    cxoCompareData.forEach(u => {
+      const email = u.user || u.email || 'Unknown'
+      if (!userMap[email]) {
+        userMap[email] = {
+          user: email,
+          'Team Chat (Compare)': 0,
+          'Private Chat (Compare)': 0,
+          'Calls (Compare)': 0,
+          'Meetings Org (Compare)': 0,
+          'Meetings Att (Compare)': 0,
+          'One-time Org (Compare)': 0,
+          'One-time Att (Compare)': 0,
+          'Recurring Org (Compare)': 0,
+          'Recurring Att (Compare)': 0,
+          'Post Messages (Compare)': 0,
+        }
+      }
+      userMap[email]['Team Chat (Compare)'] += u['Team Chat'] || 0
+      userMap[email]['Private Chat (Compare)'] += u['Private Chat'] || 0
+      userMap[email]['Calls (Compare)'] += u['Calls'] || 0
+      userMap[email]['Meetings Org (Compare)'] += u['Meetings Org'] || 0
+      userMap[email]['Meetings Att (Compare)'] += u['Meetings Att'] || 0
+      userMap[email]['One-time Org (Compare)'] += u['One-time Org'] || 0
+      userMap[email]['One-time Att (Compare)'] += u['One-time Att'] || 0
+      userMap[email]['Recurring Org (Compare)'] += u['Recurring Org'] || 0
+      userMap[email]['Recurring Att (Compare)'] += u['Recurring Att'] || 0
+      userMap[email]['Post Messages (Compare)'] += u['Post Messages'] || 0
+    })
+    
+    return Object.values(userMap).sort((a, b) => a.user.localeCompare(b.user))
+  }, [cxoCompareData])
+
+  // Merge CXO user data for comparison
+  const cxoMergedUserData = useMemo(() => {
+    if (!compareMode || !compareFileId) return cxoUserData
+
+    // Create a map of user -> data for both files
+    const file1Map = {}
+    const file2Map = {}
+
+    cxoUserData.forEach(u => {
+      file1Map[u.user] = u
+    })
+
+    cxoCompareUserData.forEach(u => {
+      file2Map[u.user] = u
+    })
+
+    // Get all users from both files
+    const allUsers = new Set([...Object.keys(file1Map), ...Object.keys(file2Map)])
+
+    // Create merged records
+    const merged = []
+    allUsers.forEach(user => {
+      const file1Data = file1Map[user]
+      const file2Data = file2Map[user]
+
+      merged.push({
+        user,
+        'Team Chat': file1Data ? file1Data['Team Chat'] : 0,
+        'Private Chat': file1Data ? file1Data['Private Chat'] : 0,
+        'Calls': file1Data ? file1Data['Calls'] : 0,
+        'Meetings Org': file1Data ? file1Data['Meetings Org'] : 0,
+        'Meetings Att': file1Data ? file1Data['Meetings Att'] : 0,
+        'One-time Org': file1Data ? file1Data['One-time Org'] : 0,
+        'One-time Att': file1Data ? file1Data['One-time Att'] : 0,
+        'Recurring Org': file1Data ? file1Data['Recurring Org'] : 0,
+        'Recurring Att': file1Data ? file1Data['Recurring Att'] : 0,
+        'Post Messages': file1Data ? file1Data['Post Messages'] : 0,
+        'Team Chat (Compare)': file2Data ? file2Data['Team Chat (Compare)'] : 0,
+        'Private Chat (Compare)': file2Data ? file2Data['Private Chat (Compare)'] : 0,
+        'Calls (Compare)': file2Data ? file2Data['Calls (Compare)'] : 0,
+        'Meetings Org (Compare)': file2Data ? file2Data['Meetings Org (Compare)'] : 0,
+        'Meetings Att (Compare)': file2Data ? file2Data['Meetings Att (Compare)'] : 0,
+        'One-time Org (Compare)': file2Data ? file2Data['One-time Org (Compare)'] : 0,
+        'One-time Att (Compare)': file2Data ? file2Data['One-time Att (Compare)'] : 0,
+        'Recurring Org (Compare)': file2Data ? file2Data['Recurring Org (Compare)'] : 0,
+        'Recurring Att (Compare)': file2Data ? file2Data['Recurring Att (Compare)'] : 0,
+        'Post Messages (Compare)': file2Data ? file2Data['Post Messages (Compare)'] : 0,
+      })
+    })
+
+    return merged.sort((a, b) => a.user.localeCompare(b.user))
+  }, [cxoUserData, cxoCompareUserData, compareMode, compareFileId])
+
+  // Generate activity chart data for each CXO user
+  const cxoUserActivityCharts = useMemo(() => {
+    const dataToUse = cxoMergedUserData.length > 0 ? cxoMergedUserData : cxoUserData
+    if (dataToUse.length === 0) return []
+
+    const activities = [
+      { key: 'Team Chat', label: 'Team Chat Message Count' },
+      { key: 'Private Chat', label: 'Private Chat Message Count' },
+      { key: 'Calls', label: 'Call Count' },
+      { key: 'Meetings Org', label: 'Meetings Organized Count' },
+      { key: 'Meetings Att', label: 'Meetings Attended Count' },
+      { key: 'One-time Org', label: 'One-time Meetings Organized' },
+      { key: 'One-time Att', label: 'One-time Meetings Attended' },
+      { key: 'Recurring Org', label: 'Recurring Meetings Organized' },
+      { key: 'Recurring Att', label: 'Recurring Meetings Attended' },
+      { key: 'Post Messages', label: 'Post Messages' },
+    ]
+
+    const file1 = files.find(f => f.id === selectedFileId)
+    const file2 = files.find(f => f.id === compareFileId)
+    const file1Label = file1 ? `${file1.from_month} to ${file1.to_month}` : 'File 1'
+    const file2Label = file2 ? `${file2.from_month} to ${file2.to_month}` : 'File 2'
+
+    return dataToUse.map(userData => {
+      const chartData = activities.map(activity => {
+        const result = {
+          activity: activity.label,
+        }
+
+        result[file1Label] = userData[activity.key] || 0
+
+        if (compareMode && compareFileId) {
+          result[file2Label] = userData[`${activity.key} (Compare)`] || 0
+        }
+
+        return result
+      })
+
+      return {
+        user: userData.user,
+        chartData
+      }
+    })
+  }, [cxoMergedUserData, cxoUserData, files, selectedFileId, compareFileId, compareMode])
 
   // Aggregate total activities (when no user selected)
   const totalActivities = useMemo(() => {
@@ -516,6 +843,16 @@ export default function TeamsDashboardPage() {
             >
               Company-wise
             </button>
+            <button
+              onClick={() => setActiveTab('cxo')}
+              className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'cxo'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              CXO Comparison
+            </button>
           </nav>
         </div>
       </div>
@@ -679,28 +1016,53 @@ export default function TeamsDashboardPage() {
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <div className="card p-4 border-l-4 border-blue-500">
             <p className="text-sm text-gray-600">Team Chats</p>
-            <p className="text-2xl font-bold text-gray-900">{filteredData.reduce((sum, d) => sum + d['Team Chat'], 0).toLocaleString()}</p>
-            <p className="text-xs text-gray-500 mt-1">{filteredData.length} user(s)</p>
+            <p className="text-2xl font-bold text-gray-900">{filteredData.reduce((sum, d) => sum + (d['Team Chat'] || 0), 0).toLocaleString()}</p>
+            <p className="text-xs text-gray-500 mt-1">{selectedUser ? '1 user(s)' : `${uniqueUsers.length} user(s)`}</p>
           </div>
           <div className="card p-4 border-l-4 border-green-500">
             <p className="text-sm text-gray-600">Private Chats</p>
-            <p className="text-2xl font-bold text-gray-900">{filteredData.reduce((sum, d) => sum + d['Private Chat'], 0).toLocaleString()}</p>
-            <p className="text-xs text-gray-500 mt-1">{filteredData.length} user(s)</p>
+            <p className="text-2xl font-bold text-gray-900">{filteredData.reduce((sum, d) => sum + (d['Private Chat'] || 0), 0).toLocaleString()}</p>
+            <p className="text-xs text-gray-500 mt-1">{selectedUser ? '1 user(s)' : `${uniqueUsers.length} user(s)`}</p>
           </div>
           <div className="card p-4 border-l-4 border-orange-500">
             <p className="text-sm text-gray-600">Calls</p>
-            <p className="text-2xl font-bold text-gray-900">{filteredData.reduce((sum, d) => sum + d['Calls'], 0).toLocaleString()}</p>
-            <p className="text-xs text-gray-500 mt-1">{filteredData.length} user(s)</p>
+            <p className="text-2xl font-bold text-gray-900">{filteredData.reduce((sum, d) => sum + (d['Calls'] || 0), 0).toLocaleString()}</p>
+            <p className="text-xs text-gray-500 mt-1">{selectedUser ? '1 user(s)' : `${uniqueUsers.length} user(s)`}</p>
           </div>
           <div className="card p-4 border-l-4 border-purple-500">
             <p className="text-sm text-gray-600">Meetings Organized</p>
-            <p className="text-2xl font-bold text-gray-900">{filteredData.reduce((sum, d) => sum + d['Meetings Org'], 0).toLocaleString()}</p>
-            <p className="text-xs text-gray-500 mt-1">{filteredData.length} user(s)</p>
+            <p className="text-2xl font-bold text-gray-900">{filteredData.reduce((sum, d) => sum + (d['Meetings Org'] || 0), 0).toLocaleString()}</p>
+            <p className="text-xs text-gray-500 mt-1">{selectedUser ? '1 user(s)' : `${uniqueUsers.length} user(s)`}</p>
           </div>
           <div className="card p-4 border-l-4 border-pink-500">
             <p className="text-sm text-gray-600">Meetings Attended</p>
-            <p className="text-2xl font-bold text-gray-900">{filteredData.reduce((sum, d) => sum + d['Meetings Att'], 0).toLocaleString()}</p>
-            <p className="text-xs text-gray-500 mt-1">{filteredData.length} user(s)</p>
+            <p className="text-2xl font-bold text-gray-900">{filteredData.reduce((sum, d) => sum + (d['Meetings Att'] || 0), 0).toLocaleString()}</p>
+            <p className="text-xs text-gray-500 mt-1">{selectedUser ? '1 user(s)' : `${uniqueUsers.length} user(s)`}</p>
+          </div>
+          <div className="card p-4 border-l-4 border-teal-500">
+            <p className="text-sm text-gray-600">One-time Meetings Organized</p>
+            <p className="text-2xl font-bold text-gray-900">{filteredData.reduce((sum, d) => sum + (d['One-time Org'] || 0), 0).toLocaleString()}</p>
+            <p className="text-xs text-gray-500 mt-1">{selectedUser ? '1 user(s)' : `${uniqueUsers.length} user(s)`}</p>
+          </div>
+          <div className="card p-4 border-l-4 border-cyan-500">
+            <p className="text-sm text-gray-600">One-time Meetings Attended</p>
+            <p className="text-2xl font-bold text-gray-900">{filteredData.reduce((sum, d) => sum + (d['One-time Att'] || 0), 0).toLocaleString()}</p>
+            <p className="text-xs text-gray-500 mt-1">{selectedUser ? '1 user(s)' : `${uniqueUsers.length} user(s)`}</p>
+          </div>
+          <div className="card p-4 border-l-4 border-indigo-500">
+            <p className="text-sm text-gray-600">Recurring Meetings Organized</p>
+            <p className="text-2xl font-bold text-gray-900">{filteredData.reduce((sum, d) => sum + (d['Recurring Org'] || 0), 0).toLocaleString()}</p>
+            <p className="text-xs text-gray-500 mt-1">{selectedUser ? '1 user(s)' : `${uniqueUsers.length} user(s)`}</p>
+          </div>
+          <div className="card p-4 border-l-4 border-violet-500">
+            <p className="text-sm text-gray-600">Recurring Meetings Attended</p>
+            <p className="text-2xl font-bold text-gray-900">{filteredData.reduce((sum, d) => sum + (d['Recurring Att'] || 0), 0).toLocaleString()}</p>
+            <p className="text-xs text-gray-500 mt-1">{selectedUser ? '1 user(s)' : `${uniqueUsers.length} user(s)`}</p>
+          </div>
+          <div className="card p-4 border-l-4 border-red-500">
+            <p className="text-sm text-gray-600">Post Messages</p>
+            <p className="text-2xl font-bold text-gray-900">{filteredData.reduce((sum, d) => sum + (d['Post Messages'] || 0), 0).toLocaleString()}</p>
+            <p className="text-xs text-gray-500 mt-1">{selectedUser ? '1 user(s)' : `${uniqueUsers.length} user(s)`}</p>
           </div>
         </div>
       )}
@@ -1054,6 +1416,299 @@ export default function TeamsDashboardPage() {
             />
           </div>
         </div>
+      )}
+
+      {/* CXO Comparison Tab */}
+      {activeTab === 'cxo' && (
+        <>
+          {/* CXO Filters */}
+          <div className="card p-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <label className="inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={compareMode}
+                    onChange={(e) => {
+                      setCompareMode(e.target.checked)
+                      if (!e.target.checked) setCompareFileId(null)
+                    }}
+                    className="form-checkbox h-4 w-4 text-blue-600 rounded"
+                  />
+                  <span className="ml-2 text-sm font-medium text-gray-700">Enable Comparison Mode</span>
+                </label>
+              </div>
+              <button
+                onClick={() => setShowCXOManagement(!showCXOManagement)}
+                className="btn btn-sm"
+              >
+                {showCXOManagement ? 'Hide' : 'Manage'} CXO Users
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label htmlFor="cxoFileSelect" className="block text-sm font-medium text-gray-700 mb-1">
+                  {compareMode ? 'Teams File 1' : 'Teams File'}
+                </label>
+                <select
+                  id="cxoFileSelect"
+                  value={selectedFileId || ''}
+                  onChange={(e) => setSelectedFileId(e.target.value ? parseInt(e.target.value) : null)}
+                  className="form-select w-full"
+                >
+                  <option value="">All Files</option>
+                  {files.map(f => (
+                    <option key={f.id} value={f.id}>
+                      {f.filename} ({f.from_month && f.to_month ? `${f.from_month} to ${f.to_month}` : f.from_month || f.to_month || 'No date range'})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {compareMode && (
+                <div>
+                  <label htmlFor="cxoCompareFileSelect" className="block text-sm font-medium text-gray-700 mb-1">Teams File 2</label>
+                  <select
+                    id="cxoCompareFileSelect"
+                    value={compareFileId || ''}
+                    onChange={(e) => setCompareFileId(e.target.value ? parseInt(e.target.value) : null)}
+                    className="form-select w-full border-2 border-blue-300"
+                  >
+                    <option value="">Select file to compare</option>
+                    {files.filter(f => f.id !== selectedFileId).map(f => (
+                      <option key={f.id} value={f.id}>
+                        {f.filename} ({f.from_month && f.to_month ? `${f.from_month} to ${f.to_month}` : f.from_month || f.to_month || 'No date range'})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+
+            {/* CXO Management UI */}
+            {showCXOManagement && (
+              <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                <h4 className="text-sm font-semibold text-gray-800 mb-3">Mark Employees as CXO</h4>
+                
+                {employeeFiles.length === 0 ? (
+                  <p className="text-sm text-gray-500 text-center py-4">
+                    Please upload an Employee List file first to mark employees as CXO.
+                  </p>
+                ) : (
+                  <>
+                    <div className="mb-4">
+                      <label htmlFor="employeeFileForCXO" className="block text-sm font-medium text-gray-700 mb-1">
+                        Select Employee File
+                      </label>
+                      <select
+                        id="employeeFileForCXO"
+                        value={selectedEmployeeFileForCXO || ''}
+                        onChange={(e) => setSelectedEmployeeFileForCXO(e.target.value ? parseInt(e.target.value) : null)}
+                        className="form-select w-full"
+                      >
+                        <option value="">All Employee Files</option>
+                        {employeeFiles.map(f => (
+                          <option key={f.id} value={f.id}>
+                            {f.filename}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <div className="mb-3">
+                        <label htmlFor="cxoSearch" className="block text-sm font-medium text-gray-700 mb-1">
+                          Search Employees
+                        </label>
+                        <input
+                          type="text"
+                          id="cxoSearch"
+                          value={cxoSearchQuery}
+                          onChange={(e) => setCxoSearchQuery(e.target.value)}
+                          placeholder="Search by name, email, function, or company..."
+                          className="form-input w-full"
+                        />
+                      </div>
+                      
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="block text-sm font-medium text-gray-700">
+                          Employees ({(() => {
+                            const filtered = employeesWithCXO.filter(emp => {
+                              if (!cxoSearchQuery.trim()) return true
+                              const query = cxoSearchQuery.toLowerCase()
+                              return (
+                                (emp.name && emp.name.toLowerCase().includes(query)) ||
+                                (emp.email && emp.email.toLowerCase().includes(query)) ||
+                                (emp.function && emp.function.toLowerCase().includes(query)) ||
+                                (emp.company && emp.company.toLowerCase().includes(query))
+                              )
+                            })
+                            return filtered.length
+                          })()})
+                        </label>
+                        <span className="text-xs text-gray-500">
+                          {employeesWithCXO.filter(e => e.is_cxo).length} marked as CXO
+                        </span>
+                      </div>
+                      <div className="max-h-96 overflow-y-auto border border-gray-200 rounded p-2 bg-white">
+                        {isLoadingEmployees ? (
+                          <p className="text-sm text-gray-500 text-center py-4">Loading employees...</p>
+                        ) : employeesWithCXO.length === 0 ? (
+                          <p className="text-sm text-gray-500 text-center py-4">No employees found in selected file(s)</p>
+                        ) : (() => {
+                          const filteredEmployees = employeesWithCXO.filter(emp => {
+                            if (!cxoSearchQuery.trim()) return true
+                            const query = cxoSearchQuery.toLowerCase()
+                            return (
+                              (emp.name && emp.name.toLowerCase().includes(query)) ||
+                              (emp.email && emp.email.toLowerCase().includes(query)) ||
+                              (emp.function && emp.function.toLowerCase().includes(query)) ||
+                              (emp.company && emp.company.toLowerCase().includes(query))
+                            )
+                          })
+                          
+                          if (filteredEmployees.length === 0) {
+                            return (
+                              <p className="text-sm text-gray-500 text-center py-4">
+                                No employees found matching "{cxoSearchQuery}"
+                              </p>
+                            )
+                          }
+                          
+                          return (
+                            <div className="space-y-1">
+                              {filteredEmployees.map((employee, idx) => (
+                                <div key={idx} className="flex items-center justify-between p-2 hover:bg-gray-50 rounded">
+                                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                                    <input
+                                      type="checkbox"
+                                      checked={employee.is_cxo}
+                                      onChange={(e) => {
+                                        if (e.target.checked) {
+                                          markCXOMutation.mutate(employee.email)
+                                        } else {
+                                          unmarkCXOMutation.mutate(employee.email)
+                                        }
+                                      }}
+                                      disabled={markCXOMutation.isLoading || unmarkCXOMutation.isLoading}
+                                      className="form-checkbox h-4 w-4 text-blue-600 rounded"
+                                    />
+                                    <div className="flex-1 min-w-0">
+                                      <div className="text-sm font-medium text-gray-900 truncate">
+                                        {employee.name || employee.email}
+                                      </div>
+                                      <div className="text-xs text-gray-500 truncate">
+                                        {employee.email}
+                                        {employee.function && ` • ${employee.function}`}
+                                        {employee.company && ` • ${employee.company}`}
+                                      </div>
+                                    </div>
+                                  </div>
+                                  {employee.is_cxo && (
+                                    <span className="ml-2 px-2 py-1 text-xs font-medium bg-blue-100 text-blue-800 rounded">
+                                      CXO
+                                    </span>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )
+                        })()}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Individual CXO Activity Charts */}
+          {cxoUserActivityCharts.length > 0 && (
+            <div className="space-y-6">
+              {cxoUserActivityCharts.map((userChart, idx) => {
+                const file1 = files.find(f => f.id === selectedFileId)
+                const file2 = files.find(f => f.id === compareFileId)
+                const file1Label = file1 ? `${file1.from_month} to ${file1.to_month}` : 'File 1'
+                const file2Label = file2 ? `${file2.from_month} to ${file2.to_month}` : 'File 2'
+                const allKeys = Object.keys(userChart.chartData[0] || {}).filter(k => k !== 'activity')
+                const file1Key = allKeys[0]
+                const file2Key = allKeys[1]
+
+                return (
+                  <div key={idx} className="card p-6">
+                    <h3 className="text-lg font-semibold text-gray-800 mb-4">
+                      {userChart.user}
+                    </h3>
+                    <div style={{ width: '100%', height: 400 }}>
+                      <ResponsiveContainer>
+                        <BarChart data={userChart.chartData} margin={{ top: 30, right: 30, left: 60, bottom: 100 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+                          <XAxis 
+                            dataKey="activity" 
+                            angle={-45} 
+                            textAnchor="end" 
+                            height={120}
+                            tick={{ fontSize: 10, fill: '#6b7280' }}
+                            axisLine={{ stroke: '#d1d5db' }}
+                            interval={0}
+                          />
+                          <YAxis 
+                            label={{ value: 'Count', angle: -90, position: 'insideLeft', style: { fill: '#6b7280' } }}
+                            tick={{ fontSize: 11, fill: '#6b7280' }} 
+                            axisLine={{ stroke: '#d1d5db' }} 
+                          />
+                          <Tooltip 
+                            contentStyle={{ 
+                              backgroundColor: 'white', 
+                              border: '1px solid #e5e7eb', 
+                              borderRadius: '8px', 
+                              boxShadow: '0 4px 6px rgba(0,0,0,0.1)' 
+                            }} 
+                          />
+                          <Legend 
+                            wrapperStyle={{ paddingTop: '10px' }}
+                            iconType="square"
+                          />
+                          
+                          {file1Key && (
+                            <Bar 
+                              key={file1Key}
+                              dataKey={file1Key} 
+                              name={file1Key}
+                              fill="#f97316" 
+                              radius={[8, 8, 0, 0]}
+                            >
+                              <LabelList dataKey={file1Key} position="top" style={{ fill: '#374151', fontSize: 11, fontWeight: 600 }} />
+                            </Bar>
+                          )}
+                          
+                          {compareMode && compareFileId && file2Key && (
+                            <Bar 
+                              key={file2Key}
+                              dataKey={file2Key} 
+                              name={file2Key}
+                              fill="#3b82f6" 
+                              radius={[8, 8, 0, 0]}
+                            >
+                              <LabelList dataKey={file2Key} position="top" style={{ fill: '#374151', fontSize: 11, fontWeight: 600 }} />
+                            </Bar>
+                          )}
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {cxoUserActivityCharts.length === 0 && !isLoading && (
+            <div className="card p-6 text-center text-gray-600">
+              <p>No CXO activity data available. {cxoUsers.length === 0 ? 'Please mark employees as CXO first.' : 'Please upload Teams activity files and mark employees as CXO.'}</p>
+            </div>
+          )}
+        </>
       )}
       </div>
     </div>

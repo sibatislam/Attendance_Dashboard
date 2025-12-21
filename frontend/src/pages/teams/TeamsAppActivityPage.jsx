@@ -234,65 +234,68 @@ export default function TeamsAppActivityPage() {
         <div className="card p-6">
           <h3 className="text-lg font-semibold text-gray-800 mb-4">Teams App Activity Charts</h3>
           
-          {/* Teams Using App Chart */}
-          <div className="mb-8">
-            <h4 className="text-md font-semibold text-gray-700 mb-3">Teams Using App</h4>
-            <div style={{ width: '100%', height: 400 }}>
-              <ResponsiveContainer>
-                <BarChart data={tableData} margin={{ top: 30, right: 30, left: 60, bottom: 100 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
-                  <XAxis 
-                    dataKey="app_name" 
-                    angle={-45} 
-                    textAnchor="end" 
-                    height={150}
-                    tick={{ fontSize: 10, fill: '#6b7280' }}
-                    interval={0}
-                  />
-                  <YAxis tick={{ fontSize: 11, fill: '#6b7280' }} />
-                  <Tooltip />
-                  <Legend />
-                  <Bar dataKey="team_using_app" name={compareMode ? fileLabels.file1Label : "Team Using App"} fill="#3b82f6" radius={[8, 8, 0, 0]}>
-                    <LabelList dataKey="team_using_app" position="top" style={{ fill: '#374151', fontSize: 10, fontWeight: 600 }} />
-                  </Bar>
-                  {compareMode && compareFileId && (
-                    <Bar dataKey="team_using_app_compare" name={fileLabels.file2Label} fill="#60a5fa" fillOpacity={0.7} radius={[8, 8, 0, 0]}>
-                      <LabelList dataKey="team_using_app_compare" position="top" style={{ fill: '#374151', fontSize: 10, fontWeight: 600 }} />
+          {/* Charts Side by Side */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Teams Using App Chart */}
+            <div>
+              <h4 className="text-md font-semibold text-gray-700 mb-3">Teams Using App</h4>
+              <div style={{ width: '100%', height: 400 }}>
+                <ResponsiveContainer>
+                  <BarChart data={tableData} margin={{ top: 30, right: 30, left: 60, bottom: 100 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+                    <XAxis 
+                      dataKey="app_name" 
+                      angle={-45} 
+                      textAnchor="end" 
+                      height={150}
+                      tick={{ fontSize: 10, fill: '#6b7280' }}
+                      interval={0}
+                    />
+                    <YAxis tick={{ fontSize: 11, fill: '#6b7280' }} />
+                    <Tooltip />
+                    <Legend />
+                    <Bar dataKey="team_using_app" name={compareMode ? fileLabels.file1Label : "Team Using App"} fill="#3b82f6" radius={[8, 8, 0, 0]}>
+                      <LabelList dataKey="team_using_app" position="top" style={{ fill: '#374151', fontSize: 10, fontWeight: 600 }} />
                     </Bar>
-                  )}
-                </BarChart>
-              </ResponsiveContainer>
+                    {compareMode && compareFileId && (
+                      <Bar dataKey="team_using_app_compare" name={fileLabels.file2Label} fill="#60a5fa" fillOpacity={0.7} radius={[8, 8, 0, 0]}>
+                        <LabelList dataKey="team_using_app_compare" position="top" style={{ fill: '#374151', fontSize: 10, fontWeight: 600 }} />
+                      </Bar>
+                    )}
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
             </div>
-          </div>
 
-          {/* Users Using App Chart */}
-          <div>
-            <h4 className="text-md font-semibold text-gray-700 mb-3">Users Using App</h4>
-            <div style={{ width: '100%', height: 400 }}>
-              <ResponsiveContainer>
-                <BarChart data={tableData} margin={{ top: 30, right: 30, left: 60, bottom: 100 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
-                  <XAxis 
-                    dataKey="app_name" 
-                    angle={-45} 
-                    textAnchor="end" 
-                    height={150}
-                    tick={{ fontSize: 10, fill: '#6b7280' }}
-                    interval={0}
-                  />
-                  <YAxis tick={{ fontSize: 11, fill: '#6b7280' }} />
-                  <Tooltip />
-                  <Legend />
-                  <Bar dataKey="users_using_app" name={compareMode ? fileLabels.file1Label : "Users Using App"} fill="#10b981" radius={[8, 8, 0, 0]}>
-                    <LabelList dataKey="users_using_app" position="top" style={{ fill: '#374151', fontSize: 10, fontWeight: 600 }} />
-                  </Bar>
-                  {compareMode && compareFileId && (
-                    <Bar dataKey="users_using_app_compare" name={fileLabels.file2Label} fill="#6ee7b7" fillOpacity={0.7} radius={[8, 8, 0, 0]}>
-                      <LabelList dataKey="users_using_app_compare" position="top" style={{ fill: '#374151', fontSize: 10, fontWeight: 600 }} />
+            {/* Users Using App Chart */}
+            <div>
+              <h4 className="text-md font-semibold text-gray-700 mb-3">Users Using App</h4>
+              <div style={{ width: '100%', height: 400 }}>
+                <ResponsiveContainer>
+                  <BarChart data={tableData} margin={{ top: 30, right: 30, left: 60, bottom: 100 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+                    <XAxis 
+                      dataKey="app_name" 
+                      angle={-45} 
+                      textAnchor="end" 
+                      height={150}
+                      tick={{ fontSize: 10, fill: '#6b7280' }}
+                      interval={0}
+                    />
+                    <YAxis tick={{ fontSize: 11, fill: '#6b7280' }} />
+                    <Tooltip />
+                    <Legend />
+                    <Bar dataKey="users_using_app" name={compareMode ? fileLabels.file1Label : "Users Using App"} fill="#10b981" radius={[8, 8, 0, 0]}>
+                      <LabelList dataKey="users_using_app" position="top" style={{ fill: '#374151', fontSize: 10, fontWeight: 600 }} />
                     </Bar>
-                  )}
-                </BarChart>
-              </ResponsiveContainer>
+                    {compareMode && compareFileId && (
+                      <Bar dataKey="users_using_app_compare" name={fileLabels.file2Label} fill="#6ee7b7" fillOpacity={0.7} radius={[8, 8, 0, 0]}>
+                        <LabelList dataKey="users_using_app_compare" position="top" style={{ fill: '#374151', fontSize: 10, fontWeight: 600 }} />
+                      </Bar>
+                    )}
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
             </div>
           </div>
         </div>

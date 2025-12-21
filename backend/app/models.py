@@ -179,3 +179,13 @@ class TeamsAppUploadedRow(Base):
     data = Column(MySQLJSON, nullable=False)
 
     file = relationship("TeamsAppUploadedFile", back_populates="rows")
+
+
+# ===== CXO Users Model =====
+
+class CXOUser(Base):
+    __tablename__ = "cxo_users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
