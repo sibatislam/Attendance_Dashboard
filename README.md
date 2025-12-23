@@ -7,13 +7,12 @@ Stack
 -----
 - Frontend: React (Vite), TailwindCSS, React Router, React Query
 - Backend: FastAPI, SQLAlchemy, openpyxl (XLSX), xlrd (XLS), csv
-- DB: MySQL (XAMPP)
+- DB: MySQL (Docker)
 
 Ports
 -----
 - Frontend: http://localhost:5173
 - Backend: http://localhost:8081
-- Apache: http://localhost:8080
 - MySQL: localhost:3310
 
 Project Structure
@@ -22,13 +21,17 @@ Project Structure
 - `frontend/` Vite React app
 - `Input Files/` sample Excel files (not used directly by code)
 
-Database Setup (XAMPP MySQL)
+Database Setup (Docker MySQL)
 ----------------------------
-1) Start MySQL in XAMPP
-2) Create database:
-   - Open phpMyAdmin (http://localhost:8080/phpmyadmin) or MySQL CLI and run:
+The database is automatically set up when using Docker. For manual setup:
+
+1) Using Docker (Recommended):
+   - Run: `docker-compose up -d`
+   - Initialize: `docker-compose exec backend python -m app.init_db`
+
+2) Using MySQL CLI (if connecting to external MySQL):
+   - Connect to MySQL and run:
      - `CREATE DATABASE attendance_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`
-3) (Optional) Create a dedicated user and grant privileges, or use root during development.
 
 Backend Setup
 -------------
@@ -86,12 +89,15 @@ Windows Shortcuts (.bat)
 
 Docker Setup
 ------------
-For containerized deployment, see `DOCKER.md` for detailed instructions.
+For containerized deployment, see the OS-specific guides:
+- **Windows:** `DOCKER_WINDOWS.md`
+- **Linux:** `DOCKER_LINUX.md`
 
 Quick start:
-1. Copy `env.docker.example` to `.env.docker` and configure
-2. Run: `docker-compose up -d`
-3. Access: http://localhost:5173 (frontend), http://localhost:8081 (backend)
+1. Copy `env.docker.example` to `.env` and configure (docker-compose reads `.env` automatically)
+2. Run: `docker-compose up -d --build`
+3. Initialize database: `docker-compose exec backend python -m app.init_db`
+4. Access: http://localhost:5173 (frontend), http://localhost:8081 (backend)
 
 For development with hot-reload:
 - `docker-compose -f docker-compose.yml -f docker-compose.dev.yml up`

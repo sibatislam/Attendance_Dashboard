@@ -25,7 +25,7 @@ This guide will walk you through setting up and running the Attendance Dashboard
 Open Command Prompt or PowerShell and navigate to your project:
 
 ```bash
-cd C:\xampp\htdocs\Attendance_Dashboard
+cd C:\path\to\Attendance_Dashboard
 ```
 
 ## Step 3: Create Environment File
@@ -42,7 +42,7 @@ cd C:\xampp\htdocs\Attendance_Dashboard
    DB_USER=root
    DB_PASSWORD=rootpassword
    DB_HOST=db
-   DB_PORT=3306
+   DB_PORT=3310
    DB_NAME=attendance_db
    
    BACKEND_PORT=8081
@@ -53,7 +53,7 @@ cd C:\xampp\htdocs\Attendance_Dashboard
 
    **Important:** 
    - Change `JWT_SECRET_KEY` to a random string (e.g., use a password generator)
-   - If ports 3306, 8081, or 5173 are already in use, change them here
+   - If ports 3310, 8081, or 5173 are already in use, change them here
 
 4. Save the file
 

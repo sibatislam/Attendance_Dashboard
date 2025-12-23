@@ -13,7 +13,7 @@ services:
       MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-rootpassword}
       MYSQL_DATABASE: ${DB_NAME:-attendance_db}
     ports:
-      - "${DB_PORT:-3306}:3306"
+      - "${DB_PORT:-3310}:3306"
     volumes:
       - mysql_data:/var/lib/mysql
       - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro

@@ -32,17 +32,28 @@ This comprehensive guide explains how to deploy and manage the Attendance Monito
    cd /path/to/Attendance_Dashboard
    ```
 
-2. **Start all services:**
+2. **Create environment file (first time only):**
    ```bash
-   docker-compose up -d
+   cp env.docker.example .env
+   # Edit .env file and change passwords/keys if needed
    ```
 
-3. **Check service status:**
+3. **Build and start all services:**
+   ```bash
+   docker-compose up -d --build
+   ```
+
+4. **Check service status:**
    ```bash
    docker-compose ps
    ```
 
-4. **View logs:**
+5. **Initialize database (first time only):**
+   ```bash
+   docker-compose exec backend python -m app.init_db
+   ```
+
+6. **View logs:**
    ```bash
    docker-compose logs -f
    ```
