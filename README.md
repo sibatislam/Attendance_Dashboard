@@ -84,4 +84,16 @@ Windows Shortcuts (.bat)
 - Run frontend only:
   - `scripts\windows\run_frontend.bat`
 
+Docker Setup
+------------
+For containerized deployment, see `DOCKER.md` for detailed instructions.
+
+Quick start:
+1. Copy `env.docker.example` to `.env.docker` and configure
+2. Run: `docker-compose up -d`
+3. Access: http://localhost:5173 (frontend), http://localhost:8081 (backend)
+
+For development with hot-reload:
+- `docker-compose -f docker-compose.yml -f docker-compose.dev.yml up`
+
 

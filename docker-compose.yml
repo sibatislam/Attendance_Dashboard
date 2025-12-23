@@ -1,0 +1,93 @@
+name: attendance-dashboard
+
+services:
+  # MySQL Database
+  db:
+    image: attendance-dashboard-mysql:latest
+    container_name: attendance-dashboard-mysql
+    build:
+      context: .
+      dockerfile: docker/mysql/Dockerfile
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${DB_NAME:-attendance_db}
+    ports:
+      - "${DB_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_PASSWORD:-rootpassword}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - attendance_network
+
+  # Backend API (FastAPI)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: attendance-dashboard-backend:latest
+    container_name: attendance-dashboard-backend
+    restart: unless-stopped
+    environment:
+      DB_USER: ${DB_USER:-root}
+      DB_PASSWORD: ${DB_PASSWORD:-rootpassword}
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-attendance_db}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-your-secret-key-change-in-production}
+    ports:
+      - "${BACKEND_PORT:-8081}:8081"
+    volumes:
+      - ./backend:/app
+      - backend_data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - attendance_network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8081/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Frontend (React/Vite)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Use backend service name for Docker network, fallback to localhost for browser
+        VITE_API_BASE: http://localhost:${BACKEND_PORT:-8081}
+    image: attendance-dashboard-frontend:latest
+    container_name: attendance-dashboard-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - attendance_network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  mysql_data:
+    driver: local
+  backend_data:
+    driver: local
+
+networks:
+  attendance_network:
+    driver: bridge
+
