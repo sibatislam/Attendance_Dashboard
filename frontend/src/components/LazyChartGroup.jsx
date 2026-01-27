@@ -157,7 +157,7 @@ const LazyChartGroup = memo(({
 
             {/* Leave Analysis Chart */}
             <div className="card p-4">
-              <h3 className="text-md font-semibold text-gray-700 mb-3">Leave Analysis</h3>
+              <h3 className="text-md font-semibold text-gray-700 mb-3">Leave Analysis Adjacent to Weekend and Holiday</h3>
               <ResponsiveContainer width="100%" height={300}>
                 <ComposedChart data={chartData.leaveAnalysis} margin={{ top: 30, right: 30, left: 20, bottom: 20 }}>
                   <defs>

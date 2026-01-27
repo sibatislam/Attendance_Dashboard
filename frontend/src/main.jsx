@@ -9,6 +9,7 @@ import { queryClient } from './lib/queryClient'
 import LoginPage from './pages/LoginPage'
 import ModuleSelectionPage from './pages/ModuleSelectionPage'
 import UserManagementPage from './pages/UserManagementPage'
+import UserProfilePage from './pages/UserProfilePage'
 import DashboardPage from './pages/DashboardPage'
 import UploadPage from './pages/UploadPage'
 import BatchesPage from './pages/BatchesPage'
@@ -18,6 +19,9 @@ import WorkHourPage from './pages/WorkHourPage'
 import WorkHourLostPage from './pages/WorkHourLostPage'
 import LeaveAnalysisPage from './pages/LeaveAnalysisPage'
 import OdAnalysisPage from './pages/OdAnalysisPage'
+import WeeklyAnalysisPage from './pages/WeeklyAnalysisPage'
+import WeeklyDashboardPage from './pages/WeeklyDashboardPage'
+import UserWisePage from './pages/UserWisePage'
 import TeamsUploadPage from './pages/teams/TeamsUploadPage'
 import TeamsBatchesPage from './pages/teams/TeamsBatchesPage'
 import TeamsFileDetailPage from './pages/teams/TeamsFileDetailPage'
@@ -26,6 +30,7 @@ import TeamsAppUploadPage from './pages/teams/TeamsAppUploadPage'
 import TeamsAppBatchesPage from './pages/teams/TeamsAppBatchesPage'
 import TeamsAppFileDetailPage from './pages/teams/TeamsAppFileDetailPage'
 import TeamsAppActivityPage from './pages/teams/TeamsAppActivityPage'
+import TeamsLicensePage from './pages/teams/TeamsLicensePage'
 import EmployeeUploadPage from './pages/employee/EmployeeUploadPage'
 import EmployeeBatchesPage from './pages/employee/EmployeeBatchesPage'
 import EmployeeFileDetailPage from './pages/employee/EmployeeFileDetailPage'
@@ -47,6 +52,10 @@ const router = createBrowserRouter([
     element: <AdminRoute><UserManagementPage /></AdminRoute>
   },
   {
+    path: '/profile',
+    element: <ProtectedRoute><UserProfilePage /></ProtectedRoute>
+  },
+  {
     path: '/attendance',
     element: <ProtectedRoute><App /></ProtectedRoute>,
     children: [
@@ -57,6 +66,10 @@ const router = createBrowserRouter([
       { 
         path: 'dashboard', 
         element: <PermissionRoute requiredFeature="dashboard"><DashboardPage /></PermissionRoute> 
+      },
+      { 
+        path: 'weekly-dashboard', 
+        element: <PermissionRoute requiredFeature="dashboard"><WeeklyDashboardPage /></PermissionRoute> 
       },
       { 
         path: 'upload', 
@@ -90,6 +103,14 @@ const router = createBrowserRouter([
         path: 'od-analysis', 
         element: <OdAnalysisPage />
       },
+      { 
+        path: 'weekly-analysis', 
+        element: <WeeklyAnalysisPage />
+      },
+      { 
+        path: 'user-wise', 
+        element: <PermissionRoute requiredFeature="dashboard"><UserWisePage /></PermissionRoute> 
+      },
     ],
   },
       {
@@ -119,6 +140,10 @@ const router = createBrowserRouter([
           { 
             path: 'app/activity', 
             element: <PermissionRoute requiredModule="teams_dashboard" requiredFeature="app_activity"><TeamsAppActivityPage /></PermissionRoute> 
+          },
+          { 
+            path: 'license', 
+            element: <PermissionRoute requiredModule="teams_dashboard"><TeamsLicensePage /></PermissionRoute> 
           },
           { 
             path: 'app/upload', 

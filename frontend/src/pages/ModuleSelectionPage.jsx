@@ -107,12 +107,19 @@ export default function ModuleSelectionPage() {
             {user && <p className="text-sm text-gray-600 mt-1">Welcome, {user.full_name || user.username}</p>}
           </div>
           <div className="flex items-center gap-3">
+            <button
+              onClick={() => navigate('/profile', { state: { from: '/modules' } })}
+              className="px-4 py-2 text-sm backdrop-blur-sm bg-white/30 border border-gray-300/50 text-gray-700 rounded-lg hover:bg-white/50 transition-all shadow-lg flex items-center gap-2"
+            >
+              <span className="lnr lnr-user"></span>
+              Profile
+            </button>
             {user?.role === 'admin' && (
               <button
                 onClick={() => navigate('/admin/users')}
                 className="px-4 py-2 text-sm backdrop-blur-sm bg-white/30 border border-gray-300/50 text-gray-700 rounded-lg hover:bg-white/50 transition-all shadow-lg"
               >
-                Manage Users
+                User & role management
               </button>
             )}
             <button
@@ -164,7 +171,7 @@ export default function ModuleSelectionPage() {
         <p className="text-gray-500 text-sm">© 2025 CIPLC. All rights reserved.</p>
       </footer>
 
-      <style jsx>{`
+      <style>{`
         @keyframes wave {
           0%, 100% { 
             transform: translate(0, 0) rotate(0deg);

@@ -1,5 +1,5 @@
-import { useState, useMemo, useRef, memo } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useState, useMemo, useRef, memo, useEffect, useCallback } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { getOnTime } from '../lib/api'
 import { getWorkHourCompletion } from '../lib/api'
 import { getWorkHourLost } from '../lib/api'
@@ -25,60 +25,145 @@ const tabs = [
 ]
 
 export default function DashboardPage() {
+  const queryClient = useQueryClient()
   const [active, setActive] = useState('function')
   const [isExporting, setIsExporting] = useState(false)
   const [exportProgress, setExportProgress] = useState({ current: 0, total: 0 })
-  const [fromM, setFromM] = useState('')
-  const [toM, setToM] = useState('')
+  // Load filters from localStorage on mount, or initialize with empty
+  const [fromM, setFromM] = useState(() => {
+    const saved = localStorage.getItem('dashboard_filters')
+    if (saved) {
+      try {
+        const filters = JSON.parse(saved)
+        return filters.fromM || ''
+      } catch (e) {
+        return ''
+      }
+    }
+    return ''
+  })
+  const [toM, setToM] = useState(() => {
+    const saved = localStorage.getItem('dashboard_filters')
+    if (saved) {
+      try {
+        const filters = JSON.parse(saved)
+        return filters.toM || ''
+      } catch (e) {
+        return ''
+      }
+    }
+    return ''
+  })
   const [visibleGroups, setVisibleGroups] = useState(5) // Show 5 groups initially
   const dashboardRef = useRef(null)
   const groupRefs = useRef({})
   const current = tabs.find(t => t.key === active)
   const baseKey = current?.base || 'function'
   
+  // Force refetch on mount to ensure fresh data
+  useEffect(() => {
+    // Invalidate and refetch all dashboard queries when component mounts
+    queryClient.invalidateQueries({ queryKey: ['kpi'] })
+    queryClient.invalidateQueries({ queryKey: ['work_hour'] })
+    queryClient.invalidateQueries({ queryKey: ['work_hour_lost'] })
+    queryClient.invalidateQueries({ queryKey: ['leave_analysis'] })
+  }, [queryClient])
+  
   // Fetch all data for the selected group with parallel loading and caching
-  const { data: onTimeData = [], isLoading: isLoadingOnTime } = useQuery({ 
+  const { data: onTimeData = [], isLoading: isLoadingOnTime, isError: isErrorOnTime, error: errorOnTime } = useQuery({ 
     queryKey: ['kpi', baseKey], 
     queryFn: () => getOnTime(baseKey),
     enabled: !!baseKey,
-    staleTime: 30 * 60 * 1000,
+    staleTime: 5 * 60 * 1000, // Reduced to 5 minutes for faster updates
     cacheTime: 30 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false
+    refetchOnMount: true, // Changed to true to ensure data loads on mount
+    retry: 1, // Allow one retry on failure
+    onError: (error) => {
+      console.error('[Dashboard] OnTime API error:', error)
+      console.error('[Dashboard] OnTime error details:', {
+        status: error.response?.status,
+        data: error.response?.data,
+        message: error.message
+      })
+    },
+    onSuccess: (data) => {
+      console.log('[Dashboard] OnTime data loaded:', data?.length || 0, 'records')
+    }
   })
-  const { data: workHourData = [], isLoading: isLoadingWorkHour } = useQuery({ 
+  const { data: workHourData = [], isLoading: isLoadingWorkHour, isError: isErrorWorkHour, error: errorWorkHour } = useQuery({ 
     queryKey: ['work_hour', baseKey], 
     queryFn: () => getWorkHourCompletion(baseKey),
     enabled: !!baseKey,
-    staleTime: 30 * 60 * 1000,
+    staleTime: 5 * 60 * 1000, // Reduced to 5 minutes for faster updates
     cacheTime: 30 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false
+    refetchOnMount: true, // Changed to true to ensure data loads on mount
+    retry: 1, // Allow one retry on failure
+    onError: (error) => {
+      console.error('[Dashboard] WorkHour API error:', error)
+      console.error('[Dashboard] WorkHour error details:', {
+        status: error.response?.status,
+        data: error.response?.data,
+        message: error.message
+      })
+    },
+    onSuccess: (data) => {
+      console.log('[Dashboard] WorkHour data loaded:', data?.length || 0, 'records')
+    }
   })
-  const { data: workHourLostData = [], isLoading: isLoadingWorkHourLost } = useQuery({ 
+  const { data: workHourLostData = [], isLoading: isLoadingWorkHourLost, isError: isErrorWorkHourLost, error: errorWorkHourLost } = useQuery({ 
     queryKey: ['work_hour_lost', baseKey], 
     queryFn: () => getWorkHourLost(baseKey),
     enabled: !!baseKey,
-    staleTime: 30 * 60 * 1000,
+    staleTime: 5 * 60 * 1000, // Reduced to 5 minutes for faster updates
     cacheTime: 30 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false
+    refetchOnMount: true, // Changed to true to ensure data loads on mount
+    retry: 1, // Allow one retry on failure
+    onError: (error) => {
+      console.error('[Dashboard] WorkHourLost API error:', error)
+      console.error('[Dashboard] WorkHourLost error details:', {
+        status: error.response?.status,
+        data: error.response?.data,
+        message: error.message
+      })
+    },
+    onSuccess: (data) => {
+      console.log('[Dashboard] WorkHourLost data loaded:', data?.length || 0, 'records')
+    }
   })
-  const { data: leaveAnalysisData = [], isLoading: isLoadingLeave } = useQuery({ 
+  const { data: leaveAnalysisData = [], isLoading: isLoadingLeave, isError: isErrorLeave, error: errorLeave } = useQuery({ 
     queryKey: ['leave_analysis', baseKey], 
     queryFn: () => getLeaveAnalysis(baseKey),
     enabled: !!baseKey,
-    staleTime: 30 * 60 * 1000,
+    staleTime: 5 * 60 * 1000, // Reduced to 5 minutes for faster updates
     cacheTime: 30 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false
+    refetchOnMount: true, // Changed to true to ensure data loads on mount
+    retry: 1, // Allow one retry on failure
+    onError: (error) => {
+      console.error('[Dashboard] LeaveAnalysis API error:', error)
+      console.error('[Dashboard] LeaveAnalysis error details:', {
+        status: error.response?.status,
+        data: error.response?.data,
+        message: error.message
+      })
+    },
+    onSuccess: (data) => {
+      console.log('[Dashboard] LeaveAnalysis data loaded:', data?.length || 0, 'records')
+    }
   })
 
   const isLoading = isLoadingOnTime || isLoadingWorkHour || isLoadingWorkHourLost || isLoadingLeave
+  const hasError = isErrorOnTime || isErrorWorkHour || isErrorWorkHourLost || isErrorLeave
+  const errorMessage = errorOnTime?.message || errorWorkHour?.message || errorWorkHourLost?.message || errorLeave?.message || 
+                       errorOnTime?.response?.data?.detail || errorWorkHour?.response?.data?.detail || 
+                       errorWorkHourLost?.response?.data?.detail || errorLeave?.response?.data?.detail
 
   // Get all unique months from all data
   const allMonths = useMemo(() => {
@@ -90,24 +175,104 @@ export default function DashboardPage() {
     return Array.from(months).sort()
   }, [onTimeData, workHourData, workHourLostData, leaveAnalysisData])
 
-  // Set default month range to latest 3 months
-  useMemo(() => {
-    if (allMonths.length > 0 && !fromM && !toM) {
+  // Check if we have any data
+  const hasAnyData = onTimeData.length > 0 || workHourData.length > 0 || workHourLostData.length > 0 || leaveAnalysisData.length > 0
+
+  // Load active tab from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem('dashboard_filters')
+    if (saved) {
+      try {
+        const filters = JSON.parse(saved)
+        if (filters.active) setActive(filters.active)
+      } catch (e) {
+        // Ignore
+      }
+    }
+  }, [])
+
+  // Save filters to localStorage whenever they change
+  useEffect(() => {
+    localStorage.setItem('dashboard_filters', JSON.stringify({ fromM, toM, active }))
+  }, [fromM, toM, active])
+
+  // Set default month range to latest 3 months (only once when data first loads and no saved filters)
+  // Use a ref to prevent multiple initializations
+  const hasInitializedMonthRange = useRef(false)
+  
+  useEffect(() => {
+    // Check if we have saved filters - if so, don't set defaults
+    const savedFilters = localStorage.getItem('dashboard_filters')
+    if (savedFilters) {
+      try {
+        const filters = JSON.parse(savedFilters)
+        if (filters.fromM || filters.toM) {
+          hasInitializedMonthRange.current = true
+          return // Don't set defaults if we have saved filters
+        }
+      } catch (e) {
+        // Continue to set defaults
+      }
+    }
+
+    // Only initialize if filters aren't set yet and we haven't initialized before
+    if (allMonths.length > 0 && !fromM && !toM && hasAnyData && !hasInitializedMonthRange.current) {
+      // Use latest 3 months as default
       const latest3Months = allMonths.slice(-3)
       if (latest3Months.length > 0) {
         setFromM(latest3Months[0])
         setToM(latest3Months[latest3Months.length - 1])
+        hasInitializedMonthRange.current = true
       }
     }
-  }, [allMonths])
+  }, [allMonths, hasAnyData, fromM, toM])
 
-  // Filter data based on month range
-  const filterDataByMonth = (data) => {
+  // Filter data based on month range - memoized to prevent recreation
+  const filterDataByMonth = useCallback((data) => {
     if (!data || !Array.isArray(data)) return []
-    const fromVal = fromM || allMonths[0] || ''
-    const toVal = toM || allMonths[allMonths.length - 1] || ''
-    return data.filter(r => (!fromVal || r.month >= fromVal) && (!toVal || r.month <= toVal))
-  }
+    // If no filters are set, show all data
+    if (!fromM && !toM) return data
+    const fromVal = fromM || ''
+    const toVal = toM || ''
+    // Use string comparison for month filtering (months are in YYYY-MM format like "2024-12")
+    // Ensure proper comparison by normalizing month strings
+    return data.filter(r => {
+      if (!r || !r.month) return false
+      const monthStr = String(r.month).trim()
+      // Normalize to YYYY-MM format for comparison
+      const normalizedMonth = monthStr.match(/^(\d{4})-(\d{1,2})/) 
+        ? monthStr 
+        : monthStr // Keep as-is if already in correct format
+      
+      const afterFrom = !fromVal || normalizedMonth >= String(fromVal).trim()
+      const beforeTo = !toVal || normalizedMonth <= String(toVal).trim()
+      return afterFrom && beforeTo
+    })
+  }, [fromM, toM])
+
+  // Helper to get chart data by group (filtered by month)
+  // Memoize this function to prevent unnecessary recalculations
+  const getChartData = useCallback((data, group) => {
+    // Defensive check: ensure data is an array
+    if (!data || !Array.isArray(data)) return []
+    const filteredByMonth = filterDataByMonth(data)
+    if (!filteredByMonth || !Array.isArray(filteredByMonth)) return []
+    // Use strict equality for group matching - function groups might have special characters
+    const filtered = filteredByMonth.filter(r => {
+      if (!r || !r.group) return false
+      // Ensure exact match - function groups are like "CI - Engineering"
+      return String(r.group).trim() === String(group).trim()
+    })
+    if (!filtered || filtered.length === 0) return []
+    return filtered
+      .map(r => ({ ...r, monthLabel: toMonthLabel(r.month) }))
+      .sort((a, b) => {
+        // Stable sort - compare month first, then group
+        const monthCompare = (a.month || '').localeCompare(b.month || '')
+        if (monthCompare !== 0) return monthCompare
+        return (a.group || '').localeCompare(b.group || '')
+      })
+  }, [filterDataByMonth]) // Depend on filterDataByMonth instead of fromM/toM directly
 
   const exportToPDF = async () => {
     if (allGroups.length === 0) return
@@ -171,12 +336,26 @@ export default function DashboardPage() {
     if (filteredWorkHourLost && Array.isArray(filteredWorkHourLost)) filteredWorkHourLost.forEach(r => r && r.group && groups.add(r.group))
     if (filteredLeaveAnalysis && Array.isArray(filteredLeaveAnalysis)) filteredLeaveAnalysis.forEach(r => r && r.group && groups.add(r.group))
     return Array.from(groups).sort()
-  }, [onTimeData, workHourData, workHourLostData, leaveAnalysisData, fromM, toM])
+  }, [onTimeData, workHourData, workHourLostData, leaveAnalysisData, filterDataByMonth])
 
   // Get only visible groups for rendering (lazy loading for performance)
   const displayedGroups = useMemo(() => {
     return allGroups.slice(0, visibleGroups)
   }, [allGroups, visibleGroups])
+
+  // Memoize chart data for all displayed groups to prevent unnecessary re-renders
+  const chartDataCache = useMemo(() => {
+    const cache = {}
+    displayedGroups.forEach(group => {
+      // Always cache the result, even if empty - let rendering handle empty states
+      // Ensure we always get arrays, even if data is undefined/null
+      cache[`onTime-${group}`] = getChartData(onTimeData || [], group)
+      cache[`workHour-${group}`] = getChartData(workHourData || [], group)
+      cache[`workHourLost-${group}`] = getChartData(workHourLostData || [], group)
+      cache[`leave-${group}`] = getChartData(leaveAnalysisData || [], group)
+    })
+    return cache
+  }, [displayedGroups, onTimeData, workHourData, workHourLostData, leaveAnalysisData, getChartData])
 
   const hasMoreGroups = visibleGroups < allGroups.length
 
@@ -287,32 +466,71 @@ export default function DashboardPage() {
       ? (weightedLost / totalLostMembers).toFixed(2)
       : 0
     
+    // Average Work Hour Lost in Hours - Latest month only, weighted by members
+    const weightedLostHours = latestWorkHourLost.reduce((sum, r) => sum + ((r.lost || 0) * (r.members || 0)), 0)
+    const avgLostHours = totalLostMembers > 0
+      ? (weightedLostHours / totalLostMembers).toFixed(2)
+      : 0
+    
     return {
       totalMembers: totalMembers,
       avgOnTime,
       avgCompletion,
       avgLost,
+      avgLostHours,
       latestMonth: latestMonth ? toMonthLabel(latestMonth) : ''
     }
-  }, [onTimeData, workHourData, workHourLostData, fromM, toM])
+  }, [onTimeData, workHourData, workHourLostData, filterDataByMonth])
 
-  // Helper to get chart data by group (filtered by month)
-  const getChartData = (data, group) => {
-    const filteredByMonth = filterDataByMonth(data)
-    if (!filteredByMonth || !Array.isArray(filteredByMonth)) return []
-    const filtered = filteredByMonth.filter(r => r && r.group === group)
-    return filtered
-      .map(r => ({ ...r, monthLabel: toMonthLabel(r.month) }))
-      .sort((a, b) => (a.month + a.group).localeCompare(b.month + b.group))
-  }
-
-  // Show partial loading state - allow viewing summary cards while data loads
-  const hasAnyData = onTimeData.length > 0 || workHourData.length > 0 || workHourLostData.length > 0 || leaveAnalysisData.length > 0
+  // Debug: Log user permissions and data status
+  useEffect(() => {
+    const user = JSON.parse(localStorage.getItem('user') || '{}')
+    const perms = user.permissions || {}
+    const attPerms = perms.attendance_dashboard || {}
+    console.log('[Dashboard] User permissions:', {
+      role: user.role,
+      attendance_enabled: attPerms.enabled,
+      features: attPerms.features || [],
+      hasDashboard: attPerms.features?.includes('dashboard')
+    })
+    console.log('[Dashboard] Data status:', {
+      onTimeData: onTimeData.length,
+      workHourData: workHourData.length,
+      workHourLostData: workHourLostData.length,
+      leaveAnalysisData: leaveAnalysisData.length,
+      isLoading,
+      hasError
+    })
+  }, [onTimeData, workHourData, workHourLostData, leaveAnalysisData, isLoading, hasError])
 
   if (allGroups.length === 0 && !isLoading) {
-    return (
-      <div className="space-y-6">
-        <div className="card p-2 flex gap-2">
+  return (
+    <div className="space-y-6">
+      {hasError && (
+        <div className="card p-4 bg-red-50 border border-red-200">
+          <div className="text-red-800 font-semibold mb-2">Error Loading Data</div>
+          <div className="text-red-600 text-sm">
+            {errorMessage || 'Failed to load dashboard data. Please check your connection and try again.'}
+          </div>
+          <div className="mt-2 text-xs text-red-500">
+            Check browser console (F12) for more details. If you see 404 errors, ensure attendance files are uploaded.
+          </div>
+        </div>
+      )}
+      {!hasError && (
+        <div className="card p-4 bg-yellow-50 border border-yellow-200">
+          <div className="text-yellow-800 font-semibold mb-2">No Data Available</div>
+          <div className="text-yellow-700 text-sm">
+            No attendance data found. Please upload attendance files first.
+          </div>
+          <div className="mt-2">
+            <a href="/attendance/upload" className="text-blue-600 hover:underline text-sm">
+              Go to Upload Files →
+            </a>
+          </div>
+        </div>
+      )}
+      <div className="card p-2 flex gap-2">
           {tabs.map(t => (
             <button 
               key={t.key} 
@@ -323,20 +541,55 @@ export default function DashboardPage() {
             </button>
           ))}
         </div>
-        <div className="text-sm text-gray-500">No data for charts.</div>
       </div>
     )
   }
 
   if (isLoading && !hasAnyData) {
+    const loadingCount = [isLoadingOnTime, isLoadingWorkHour, isLoadingWorkHourLost, isLoadingLeave].filter(Boolean).length
+    const totalCount = 4
+    const progress = ((totalCount - loadingCount) / totalCount) * 100
+    
     return (
       <div className="flex items-center justify-center h-96">
-        <div className="text-center">
+        <div className="text-center max-w-md">
           <div className="mb-4">
             <div className="inline-block animate-spin rounded-full h-16 w-16 border-b-4 border-blue-600"></div>
           </div>
           <p className="text-gray-600 font-medium mb-2">Loading Dashboard Data...</p>
-          <p className="text-sm text-gray-500 mt-2">Please wait, fetching attendance data...</p>
+          <p className="text-sm text-gray-500 mt-2 mb-4">Processing attendance data, this may take a minute...</p>
+          
+          {/* Progress Bar */}
+          <div className="w-full bg-gray-200 rounded-full h-2.5 mb-2">
+            <div 
+              className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
+              style={{ width: `${progress}%` }}
+            ></div>
+          </div>
+          
+          {/* Loading Status */}
+          <div className="space-y-2 text-sm text-gray-600">
+            <div className={`flex items-center gap-2 ${!isLoadingOnTime ? 'text-green-600' : 'text-gray-500'}`}>
+              <span className={`lnr ${!isLoadingOnTime ? 'lnr-checkmark-circle' : 'lnr-sync'} ${isLoadingOnTime ? 'animate-spin' : ''}`}></span>
+              <span>On Time % {!isLoadingOnTime && `(${onTimeData.length} records)`}</span>
+            </div>
+            <div className={`flex items-center gap-2 ${!isLoadingWorkHour ? 'text-green-600' : 'text-gray-500'}`}>
+              <span className={`lnr ${!isLoadingWorkHour ? 'lnr-checkmark-circle' : 'lnr-sync'} ${isLoadingWorkHour ? 'animate-spin' : ''}`}></span>
+              <span>Work Hour {!isLoadingWorkHour && `(${workHourData.length} records)`}</span>
+            </div>
+            <div className={`flex items-center gap-2 ${!isLoadingWorkHourLost ? 'text-green-600' : 'text-gray-500'}`}>
+              <span className={`lnr ${!isLoadingWorkHourLost ? 'lnr-checkmark-circle' : 'lnr-sync'} ${isLoadingWorkHourLost ? 'animate-spin' : ''}`}></span>
+              <span>Work Hour Lost {!isLoadingWorkHourLost && `(${workHourLostData.length} records)`}</span>
+            </div>
+            <div className={`flex items-center gap-2 ${!isLoadingLeave ? 'text-green-600' : 'text-gray-500'}`}>
+              <span className={`lnr ${!isLoadingLeave ? 'lnr-checkmark-circle' : 'lnr-sync'} ${isLoadingLeave ? 'animate-spin' : ''}`}></span>
+              <span>Leave Analysis Adjacent to Weekend and Holiday {!isLoadingLeave && `(${leaveAnalysisData.length} records)`}</span>
+            </div>
+          </div>
+          
+          <p className="text-xs text-gray-400 mt-4">
+            Large datasets may take up to 2 minutes to process...
+          </p>
         </div>
       </div>
     )
@@ -384,7 +637,7 @@ export default function DashboardPage() {
               </div>
               <div className={`flex items-center gap-2 ${!isLoadingLeave ? 'text-green-600' : 'text-gray-500'}`}>
                 <span className={`lnr ${!isLoadingLeave ? 'lnr-checkmark-circle' : 'lnr-sync'} ${isLoadingLeave ? 'animate-spin' : ''}`}></span>
-                <span>Leave Analysis</span>
+                <span>Leave Analysis Adjacent to Weekend and Holiday</span>
               </div>
             </div>
             <div className="w-full bg-gray-200 rounded-full h-2">
@@ -449,6 +702,7 @@ export default function DashboardPage() {
             <div>
               <p className="text-sm text-orange-100 mb-1">Avg Work Hour Lost %</p>
               <p className="text-3xl font-bold">{summaryStats.avgLost}%</p>
+              <p className="text-lg font-semibold mt-1 text-orange-50">{summaryStats.avgLostHours} hrs</p>
               {summaryStats.latestMonth && (
                 <p className="text-xs text-orange-100 mt-2 opacity-90">{summaryStats.latestMonth}</p>
               )}
@@ -500,7 +754,20 @@ export default function DashboardPage() {
       
       <div ref={dashboardRef}>
 
-      {displayedGroups.map((group, groupIdx) => (
+      {displayedGroups.map((group, groupIdx) => {
+        // Get chart data from cache, ensuring it's always an array
+        // Use a stable reference to prevent unnecessary re-renders
+        const cacheKeyOnTime = `onTime-${group}`
+        const cacheKeyWorkHour = `workHour-${group}`
+        const cacheKeyWorkHourLost = `workHourLost-${group}`
+        const cacheKeyLeave = `leave-${group}`
+        
+        const onTimeChartData = Array.isArray(chartDataCache[cacheKeyOnTime]) ? chartDataCache[cacheKeyOnTime] : []
+        const workHourChartData = Array.isArray(chartDataCache[cacheKeyWorkHour]) ? chartDataCache[cacheKeyWorkHour] : []
+        const workHourLostChartData = Array.isArray(chartDataCache[cacheKeyWorkHourLost]) ? chartDataCache[cacheKeyWorkHourLost] : []
+        const leaveChartData = Array.isArray(chartDataCache[cacheKeyLeave]) ? chartDataCache[cacheKeyLeave] : []
+        
+        return (
         <div key={group} ref={el => groupRefs.current[group] = el} className="space-y-4">
           <h2 className="text-xl font-semibold">{group}</h2>
           
@@ -509,9 +776,22 @@ export default function DashboardPage() {
             {/* On Time % Chart */}
             <div className="card p-4">
               <div className="mb-2 font-semibold text-gray-700">On Time %</div>
-              <div style={{ width: '100%', height: 280 }}>
-                <ResponsiveContainer>
-                  <ComposedChart data={getChartData(onTimeData, group)} margin={{ top: 30, right: 20, bottom: 0, left: 0 }}>
+              {isLoadingOnTime ? (
+                <div style={{ width: '100%', height: 280 }} className="flex items-center justify-center text-gray-500 text-sm">
+                  Loading...
+                </div>
+              ) : !onTimeChartData || onTimeChartData.length === 0 ? (
+                <div style={{ width: '100%', height: 280 }} className="flex items-center justify-center text-gray-500 text-sm">
+                  No on time data available for this group
+                </div>
+              ) : (
+                <div style={{ width: '100%', height: 280, minHeight: 280 }} key={`ontime-chart-${group}-${groupIdx}`}>
+                  <ResponsiveContainer width="100%" height={280}>
+                    <ComposedChart 
+                      data={onTimeChartData} 
+                      margin={{ top: 30, right: 20, bottom: 0, left: 0 }} 
+                      key={`ontime-composed-${group}-${groupIdx}`}
+                    >
                     <defs>
                       <linearGradient id={`gradient-blue-${groupIdx}`} x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.8}/>
@@ -536,14 +816,28 @@ export default function DashboardPage() {
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
+              )}
             </div>
 
             {/* Work Hour Completion Chart */}
             <div className="card p-4">
               <div className="mb-2 font-semibold text-gray-700">Work Hour Completion</div>
-              <div style={{ width: '100%', height: 280 }}>
-                <ResponsiveContainer>
-                  <ComposedChart data={getChartData(workHourData, group)} margin={{ top: 30, right: 20, bottom: 0, left: 0 }}>
+              {isLoadingWorkHour ? (
+                <div style={{ width: '100%', height: 280 }} className="flex items-center justify-center text-gray-500 text-sm">
+                  Loading...
+                </div>
+              ) : !workHourChartData || workHourChartData.length === 0 ? (
+                <div style={{ width: '100%', height: 280 }} className="flex items-center justify-center text-gray-500 text-sm">
+                  No work hour completion data available for this group
+                </div>
+              ) : (
+                <div style={{ width: '100%', height: 280, minHeight: 280 }} key={`workhour-chart-${group}-${groupIdx}`}>
+                  <ResponsiveContainer width="100%" height={280}>
+                    <ComposedChart 
+                      data={workHourChartData} 
+                      margin={{ top: 30, right: 20, bottom: 0, left: 0 }} 
+                      key={`workhour-composed-${group}-${groupIdx}`}
+                    >
                     <defs>
                       <linearGradient id={`gradient-green-${groupIdx}`} x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor="#10b981" stopOpacity={0.8}/>
@@ -568,6 +862,7 @@ export default function DashboardPage() {
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
+              )}
             </div>
           </div>
 
@@ -576,9 +871,22 @@ export default function DashboardPage() {
             {/* Work Hour Lost Chart */}
             <div className="card p-4">
               <div className="mb-2 font-semibold text-gray-700">Work Hour Lost</div>
-              <div style={{ width: '100%', height: 280 }}>
-                <ResponsiveContainer>
-                  <ComposedChart data={getChartData(workHourLostData, group)} margin={{ top: 30, right: 20, bottom: 0, left: 0 }}>
+              {isLoadingWorkHourLost ? (
+                <div style={{ width: '100%', height: 280 }} className="flex items-center justify-center text-gray-500 text-sm">
+                  Loading...
+                </div>
+              ) : !workHourLostChartData || workHourLostChartData.length === 0 ? (
+                <div style={{ width: '100%', height: 280 }} className="flex items-center justify-center text-gray-500 text-sm">
+                  No work hour lost data available for this group
+                </div>
+              ) : (
+                <div style={{ width: '100%', height: 280, minHeight: 280 }} key={`workhourlost-chart-${group}-${groupIdx}`}>
+                  <ResponsiveContainer width="100%" height={280}>
+                    <ComposedChart 
+                      data={workHourLostChartData} 
+                      margin={{ top: 30, right: 20, bottom: 0, left: 0 }} 
+                      key={`workhourlost-composed-${group}-${groupIdx}`}
+                    >
                     <defs>
                       <linearGradient id={`gradient-pink-${groupIdx}`} x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor="#ec4899" stopOpacity={0.8}/>
@@ -606,48 +914,64 @@ export default function DashboardPage() {
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
+              )}
             </div>
 
             {/* Leave Analysis Chart */}
             <div className="card p-4">
-              <div className="mb-2 font-semibold text-gray-700">Leave Analysis</div>
-              <div style={{ width: '100%', height: 280 }}>
-                <ResponsiveContainer>
-                  <ComposedChart data={getChartData(leaveAnalysisData, group)} margin={{ top: 30, right: 20, bottom: 0, left: 0 }}>
-                    <defs>
-                      <linearGradient id={`gradient-purple-${groupIdx}`} x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#8b5cf6" stopOpacity={0.8}/>
-                        <stop offset="100%" stopColor="#a78bfa" stopOpacity={0.4}/>
-                      </linearGradient>
-                      <filter id={`shadow-purple-${groupIdx}`}>
-                        <feDropShadow dx="0" dy="2" stdDeviation="3" floodColor="#8b5cf6" floodOpacity="0.3"/>
-                      </filter>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
-                    <XAxis dataKey="monthLabel" tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={{ stroke: '#d1d5db' }} />
-                    <YAxis yAxisId="left" label={{ value: 'Members', angle: -90, position: 'insideLeft', style: { fill: '#6b7280' } }} tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={{ stroke: '#d1d5db' }} />
-                    <YAxis yAxisId="right" orientation="right" label={{ value: 'SL%, CL% & A%', angle: -90, position: 'insideRight', style: { fill: '#6b7280' } }} domain={[0, 100]} tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={{ stroke: '#d1d5db' }} />
-                    <Tooltip contentStyle={{ backgroundColor: 'white', border: '1px solid #e5e7eb', borderRadius: '8px', boxShadow: '0 4px 6px rgba(0,0,0,0.1)' }} labelStyle={{ color: '#374151', fontWeight: 600 }} />
-                    <Legend wrapperStyle={{ paddingTop: '10px' }} />
-                    <Bar yAxisId="left" dataKey="members" name="Members" fill={`url(#gradient-purple-${groupIdx})`} radius={[8, 8, 0, 0]} filter={`url(#shadow-purple-${groupIdx})`}>
-                      <LabelList content={<BarValueLabel />} />
-                    </Bar>
-                    <Line yAxisId="right" type="monotone" dataKey="sl_pct" name="SL %" stroke="#f97316" strokeWidth={3} dot={{ fill: '#f97316', r: 5, strokeWidth: 2, stroke: 'white' }} activeDot={{ r: 7 }}>
-                      <LabelList content={<SLPercentLabel />} />
-                    </Line>
-                    <Line yAxisId="right" type="monotone" dataKey="cl_pct" name="CL %" stroke="#10b981" strokeWidth={3} dot={{ fill: '#10b981', r: 5, strokeWidth: 2, stroke: 'white' }} activeDot={{ r: 7 }}>
-                      <LabelList content={<CLPercentLabel />} />
-                    </Line>
-                    <Line yAxisId="right" type="monotone" dataKey="a_pct" name="A %" stroke="#ef4444" strokeWidth={3} dot={{ fill: '#ef4444', r: 5, strokeWidth: 2, stroke: 'white' }} activeDot={{ r: 7 }}>
-                      <LabelList content={<APercentLabel />} />
-                    </Line>
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
+              <div className="mb-2 font-semibold text-gray-700">Leave Analysis Adjacent to Weekend and Holiday</div>
+              {isLoadingLeave ? (
+                <div style={{ width: '100%', height: 280 }} className="flex items-center justify-center text-gray-500 text-sm">
+                  Loading...
+                </div>
+              ) : !leaveChartData || leaveChartData.length === 0 ? (
+                <div style={{ width: '100%', height: 280 }} className="flex items-center justify-center text-gray-500 text-sm">
+                  No leave analysis data available for this group
+                </div>
+              ) : (
+                <div style={{ width: '100%', height: 280, minHeight: 280 }} key={`leave-chart-${group}-${groupIdx}`}>
+                  <ResponsiveContainer width="100%" height={280}>
+                    <ComposedChart 
+                      data={leaveChartData} 
+                      margin={{ top: 30, right: 20, bottom: 0, left: 0 }} 
+                      key={`leave-composed-${group}-${groupIdx}`}
+                    >
+                        <defs>
+                          <linearGradient id={`gradient-purple-${groupIdx}`} x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#8b5cf6" stopOpacity={0.8}/>
+                            <stop offset="100%" stopColor="#a78bfa" stopOpacity={0.4}/>
+                          </linearGradient>
+                          <filter id={`shadow-purple-${groupIdx}`}>
+                            <feDropShadow dx="0" dy="2" stdDeviation="3" floodColor="#8b5cf6" floodOpacity="0.3"/>
+                          </filter>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+                        <XAxis dataKey="monthLabel" tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={{ stroke: '#d1d5db' }} />
+                        <YAxis yAxisId="left" label={{ value: 'Members', angle: -90, position: 'insideLeft', style: { fill: '#6b7280' } }} tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={{ stroke: '#d1d5db' }} />
+                        <YAxis yAxisId="right" orientation="right" label={{ value: 'SL%, CL% & A%', angle: -90, position: 'insideRight', style: { fill: '#6b7280' } }} domain={[0, 100]} tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={{ stroke: '#d1d5db' }} />
+                        <Tooltip contentStyle={{ backgroundColor: 'white', border: '1px solid #e5e7eb', borderRadius: '8px', boxShadow: '0 4px 6px rgba(0,0,0,0.1)' }} labelStyle={{ color: '#374151', fontWeight: 600 }} />
+                        <Legend wrapperStyle={{ paddingTop: '10px' }} />
+                        <Bar yAxisId="left" dataKey="members" name="Members" fill={`url(#gradient-purple-${groupIdx})`} radius={[8, 8, 0, 0]} filter={`url(#shadow-purple-${groupIdx})`}>
+                          <LabelList content={<BarValueLabel />} />
+                        </Bar>
+                        <Line yAxisId="right" type="monotone" dataKey="sl_pct" name="SL %" stroke="#f97316" strokeWidth={3} dot={{ fill: '#f97316', r: 5, strokeWidth: 2, stroke: 'white' }} activeDot={{ r: 7 }}>
+                          <LabelList content={<SLPercentLabel />} />
+                        </Line>
+                        <Line yAxisId="right" type="monotone" dataKey="cl_pct" name="CL %" stroke="#10b981" strokeWidth={3} dot={{ fill: '#10b981', r: 5, strokeWidth: 2, stroke: 'white' }} activeDot={{ r: 7 }}>
+                          <LabelList content={<CLPercentLabel />} />
+                        </Line>
+                        <Line yAxisId="right" type="monotone" dataKey="a_pct" name="A %" stroke="#ef4444" strokeWidth={3} dot={{ fill: '#ef4444', r: 5, strokeWidth: 2, stroke: 'white' }} activeDot={{ r: 7 }}>
+                          <LabelList content={<APercentLabel />} />
+                        </Line>
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+              )}
             </div>
           </div>
         </div>
-      ))}
+        )
+      })}
 
       {/* Load More Button */}
       {hasMoreGroups && (

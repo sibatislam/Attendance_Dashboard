@@ -74,6 +74,17 @@ class LocationKPI(Base):
     computed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class Role(Base):
+    """Roles define which modules and menus (features) a user can access."""
+    __tablename__ = "roles"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(50), unique=True, nullable=False, index=True)
+    permissions = Column(MySQLJSON, nullable=False, default=dict)  # { attendance_dashboard: {...}, teams_dashboard: {...} }
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -82,12 +93,12 @@ class User(Base):
     username = Column(String(100), unique=True, nullable=False, index=True)
     hashed_password = Column(String(255), nullable=False)
     full_name = Column(String(255), nullable=True)
-    role = Column(String(20), nullable=False, default="user")  # admin or user
+    role = Column(String(50), nullable=False, default="user")  # admin (special) or role name from roles table
     is_active = Column(Boolean, default=True, nullable=False)
     phone = Column(String(20), nullable=True)
     department = Column(String(100), nullable=True)
     position = Column(String(100), nullable=True)
-    permissions = Column(MySQLJSON, nullable=True, default=dict)  # Module permissions
+    permissions = Column(MySQLJSON, nullable=True, default=dict)  # Legacy; role-based perms take precedence
     last_login = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -189,3 +200,17 @@ class CXOUser(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     email = Column(String(255), unique=True, nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+# ===== Teams License Settings Model =====
+
+class TeamsLicense(Base):
+    """Stores Teams license settings (shared across all users)."""
+    __tablename__ = "teams_license"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    total_teams = Column(Integer, nullable=False, default=0)
+    total_assigned = Column(Integer, nullable=False, default=0)
+    free = Column(Integer, nullable=False, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    updated_by = Column(Integer, ForeignKey("users.id"), nullable=True)  # Track who last updated

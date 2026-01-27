@@ -1,8 +1,9 @@
 """CXO user management endpoints."""
 from typing import List, Optional
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, ConfigDict
 
 from ..db import get_db
 from ..models import CXOUser, EmployeeUploadedFile, EmployeeUploadedRow
@@ -16,12 +17,11 @@ class CXOUserCreate(BaseModel):
 
 
 class CXOUserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     email: str
-    created_at: str
-
-    class Config:
-        from_attributes = True
+    created_at: datetime
 
 
 class EmployeeWithCXOStatus(BaseModel):

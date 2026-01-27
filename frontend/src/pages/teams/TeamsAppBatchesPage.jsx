@@ -19,13 +19,20 @@ export default function TeamsAppBatchesPage() {
 
   const deleteMutation = useMutation({
     mutationFn: deleteTeamsAppFiles,
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['teams_app_files'] })
       setSelected([])
       setShowConfirm(false)
+      if (data?.deleted_count > 0) {
+        alert(`Successfully deleted ${data.deleted_count} file(s)`)
+      } else {
+        alert('No files were deleted. Please check if the files exist.')
+      }
     },
     onError: (err) => {
-      alert('Failed to delete files: ' + (err.response?.data?.detail || err.message))
+      console.error('Delete error:', err)
+      const errorMessage = err.response?.data?.detail || err.message || 'Unknown error occurred'
+      alert('Failed to delete files: ' + errorMessage)
       setShowConfirm(false)
     },
   })
@@ -47,7 +54,25 @@ export default function TeamsAppBatchesPage() {
   const handleDeleteSelected = () => {
     if (selected.length > 0) {
       setShowConfirm(true)
+    } else {
+      alert('Please select at least one file to delete')
     }
+  }
+
+  const handleConfirmDelete = () => {
+    if (selected.length === 0) {
+      alert('No files selected')
+      setShowConfirm(false)
+      return
+    }
+    // Ensure IDs are numbers
+    const idsToDelete = selected.map(id => Number(id)).filter(id => !isNaN(id))
+    if (idsToDelete.length === 0) {
+      alert('Invalid file IDs')
+      setShowConfirm(false)
+      return
+    }
+    deleteMutation.mutate(idsToDelete)
   }
 
   if (isLoading) {
@@ -150,14 +175,13 @@ export default function TeamsAppBatchesPage() {
         </div>
       )}
 
-      {showConfirm && (
-        <ConfirmDialog
-          message={`Are you sure you want to delete ${selected.length} selected file(s)? This action cannot be undone.`}
-          onConfirm={() => deleteMutation.mutate(selected)}
-          onCancel={() => setShowConfirm(false)}
-          isDanger={true}
-        />
-      )}
+      <ConfirmDialog
+        open={showConfirm}
+        title="Delete Files"
+        message={`Are you sure you want to delete ${selected.length} selected file(s)? This action cannot be undone.`}
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setShowConfirm(false)}
+      />
     </div>
   )
 }

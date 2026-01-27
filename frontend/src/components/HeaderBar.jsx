@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 
 export default function HeaderBar({ right }) {
   const [user, setUser] = useState(null)
   const navigate = useNavigate()
+  const location = useLocation()
 
   useEffect(() => {
     const userData = localStorage.getItem('user')
@@ -28,12 +29,19 @@ export default function HeaderBar({ right }) {
               <div className="text-sm font-semibold text-gray-900">{user.full_name || user.username}</div>
               <div className="text-xs text-gray-500">{user.email}</div>
             </div>
+            <button
+              onClick={() => navigate('/profile', { state: { from: location.pathname } })}
+              className="px-3 py-1.5 text-xs border border-white/40 backdrop-blur-sm bg-white/30 text-gray-700 rounded-md hover:bg-white/50 transition-all flex items-center gap-1"
+            >
+              <span className="lnr lnr-user"></span>
+              Profile
+            </button>
             {user.role === 'admin' && (
               <button
                 onClick={() => navigate('/admin/users')}
                 className="px-3 py-1.5 text-xs border border-white/40 backdrop-blur-sm bg-white/30 text-gray-700 rounded-md hover:bg-white/50 transition-all"
               >
-                Manage Users
+                User & role management
               </button>
             )}
             <button

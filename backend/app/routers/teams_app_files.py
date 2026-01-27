@@ -75,6 +75,29 @@ def delete_teams_app_files(
     current_user = Depends(get_current_user)
 ):
     """Delete one or more Teams App Usage files."""
+    if not request.file_ids:
+        return {"deleted_count": 0}
+    
+    deleted_count = 0
+    for file_id in request.file_ids:
+        file = db.query(TeamsAppUploadedFile).filter(TeamsAppUploadedFile.id == file_id).first()
+        if file:
+            db.delete(file)
+            deleted_count += 1
+    db.commit()
+    return {"deleted_count": deleted_count}
+
+
+@router.post("/delete", response_model=DeleteResponse)
+def delete_teams_app_files_post(
+    request: DeleteRequest,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """Delete one or more Teams App Usage files (POST method for better compatibility)."""
+    if not request.file_ids:
+        return {"deleted_count": 0}
+    
     deleted_count = 0
     for file_id in request.file_ids:
         file = db.query(TeamsAppUploadedFile).filter(TeamsAppUploadedFile.id == file_id).first()

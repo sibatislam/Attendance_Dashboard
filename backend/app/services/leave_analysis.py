@@ -228,6 +228,10 @@ def compute_leave_analysis(db: Session, group_by: str) -> List[Dict[str, Any]]:
                 count_sl[key] += 1
         
         # Check adjacency for each pair of consecutive filtered records
+        # Track which CL/SL records have already been counted as adjacent to avoid double counting
+        cl_adjacent_counted = set()  # Track (month, group_val, date) tuples for CL already counted
+        sl_adjacent_counted = set()  # Track (month, group_val, date) tuples for SL already counted
+        
         if len(filtered_records) < 2:
             continue
         
@@ -248,29 +252,57 @@ def compute_leave_analysis(db: Session, group_by: str) -> List[Dict[str, Any]]:
                 # Use current record's month as key
                 key = (curr["month"], group_val)
                 
-                # Check SL adjacent to W
+                # Check SL adjacent to W - only count each SL once
+                # Use the SL record's month for the key
                 if curr["flag"] == "SL" and next_rec["flag"] == "W":
-                    sl_adjacent_w[key] += 1
+                    sl_key = (curr["month"], group_val, curr_date)
+                    if sl_key not in sl_adjacent_counted:
+                        sl_adjacent_w[(curr["month"], group_val)] += 1
+                        sl_adjacent_counted.add(sl_key)
                 elif curr["flag"] == "W" and next_rec["flag"] == "SL":
-                    sl_adjacent_w[key] += 1
+                    sl_key = (next_rec["month"], group_val, next_date)
+                    if sl_key not in sl_adjacent_counted:
+                        sl_adjacent_w[(next_rec["month"], group_val)] += 1
+                        sl_adjacent_counted.add(sl_key)
                 
-                # Check CL adjacent to W
+                # Check CL adjacent to W - only count each CL once
+                # Use the CL record's month for the key
                 if curr["flag"] == "CL" and next_rec["flag"] == "W":
-                    cl_adjacent_w[key] += 1
+                    cl_key = (curr["month"], group_val, curr_date)
+                    if cl_key not in cl_adjacent_counted:
+                        cl_adjacent_w[(curr["month"], group_val)] += 1
+                        cl_adjacent_counted.add(cl_key)
                 elif curr["flag"] == "W" and next_rec["flag"] == "CL":
-                    cl_adjacent_w[key] += 1
+                    cl_key = (next_rec["month"], group_val, next_date)
+                    if cl_key not in cl_adjacent_counted:
+                        cl_adjacent_w[(next_rec["month"], group_val)] += 1
+                        cl_adjacent_counted.add(cl_key)
                 
-                # Check SL adjacent to H
+                # Check SL adjacent to H - only count each SL once
+                # Use the SL record's month for the key
                 if curr["flag"] == "SL" and next_rec["flag"] == "H":
-                    sl_adjacent_h[key] += 1
+                    sl_key = (curr["month"], group_val, curr_date)
+                    if sl_key not in sl_adjacent_counted:
+                        sl_adjacent_h[(curr["month"], group_val)] += 1
+                        sl_adjacent_counted.add(sl_key)
                 elif curr["flag"] == "H" and next_rec["flag"] == "SL":
-                    sl_adjacent_h[key] += 1
+                    sl_key = (next_rec["month"], group_val, next_date)
+                    if sl_key not in sl_adjacent_counted:
+                        sl_adjacent_h[(next_rec["month"], group_val)] += 1
+                        sl_adjacent_counted.add(sl_key)
                 
-                # Check CL adjacent to H
+                # Check CL adjacent to H - only count each CL once
+                # Use the CL record's month for the key
                 if curr["flag"] == "CL" and next_rec["flag"] == "H":
-                    cl_adjacent_h[key] += 1
+                    cl_key = (curr["month"], group_val, curr_date)
+                    if cl_key not in cl_adjacent_counted:
+                        cl_adjacent_h[(curr["month"], group_val)] += 1
+                        cl_adjacent_counted.add(cl_key)
                 elif curr["flag"] == "H" and next_rec["flag"] == "CL":
-                    cl_adjacent_h[key] += 1
+                    cl_key = (next_rec["month"], group_val, next_date)
+                    if cl_key not in cl_adjacent_counted:
+                        cl_adjacent_h[(next_rec["month"], group_val)] += 1
+                        cl_adjacent_counted.add(cl_key)
     
     # Calculate percentages and build results
     results = []

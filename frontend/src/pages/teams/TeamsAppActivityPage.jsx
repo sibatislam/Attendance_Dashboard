@@ -1,14 +1,83 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { listTeamsAppFiles, getTeamsAppActivity } from '../../lib/api'
 import DataTable from '../../components/DataTable'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, CartesianGrid, LabelList } from 'recharts'
+import html2canvas from 'html2canvas'
+import jsPDF from 'jspdf'
+import TeamsLicenseCards from '../../components/TeamsLicenseCards'
+
+// Helper function to format month string to "MonthName Year" format
+const formatMonthWithYear = (monthStr) => {
+  if (!monthStr) return ''
+  
+  // Handle formats like "2024-08", "2024-8", "08-2024", etc.
+  const dateMatch = monthStr.match(/(\d{4})[-/](\d{1,2})/)
+  if (dateMatch) {
+    const year = dateMatch[1]
+    const month = parseInt(dateMatch[2], 10)
+    const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 
+                       'July', 'August', 'September', 'October', 'November', 'December']
+    if (month >= 1 && month <= 12) {
+      return `${monthNames[month - 1]} ${year}`
+    }
+  }
+  
+  // Handle abbreviated month names like "Aug", "Oct", etc.
+  const monthAbbr = {
+    'Jan': 'January', 'Feb': 'February', 'Mar': 'March', 'Apr': 'April',
+    'May': 'May', 'Jun': 'June', 'Jul': 'July', 'Aug': 'August',
+    'Sep': 'September', 'Oct': 'October', 'Nov': 'November', 'Dec': 'December'
+  }
+  
+  // Try to match abbreviated month
+  for (const [abbr, full] of Object.entries(monthAbbr)) {
+    if (monthStr.toLowerCase().includes(abbr.toLowerCase())) {
+      // Try to extract year
+      const yearMatch = monthStr.match(/(\d{4})/)
+      const year = yearMatch ? yearMatch[1] : new Date().getFullYear()
+      return `${full} ${year}`
+    }
+  }
+  
+  // If it's already a full month name, try to add year
+  const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 
+                     'July', 'August', 'September', 'October', 'November', 'December']
+  for (const monthName of monthNames) {
+    if (monthStr.toLowerCase().includes(monthName.toLowerCase())) {
+      const yearMatch = monthStr.match(/(\d{4})/)
+      const year = yearMatch ? yearMatch[1] : new Date().getFullYear()
+      return `${monthName} ${year}`
+    }
+  }
+  
+  // Fallback: return as-is if we can't parse it
+  return monthStr
+}
+
+// Helper function to format month range
+const formatMonthRange = (fromMonth, toMonth) => {
+  if (!fromMonth && !toMonth) return ''
+  const from = formatMonthWithYear(fromMonth)
+  const to = formatMonthWithYear(toMonth)
+  
+  if (from && to) {
+    return `${from} to ${to}`
+  } else if (from) {
+    return from
+  } else if (to) {
+    return to
+  }
+  return ''
+}
 
 export default function TeamsAppActivityPage() {
   const [selectedFileId, setSelectedFileId] = useState(null)
   const [compareMode, setCompareMode] = useState(false)
   const [compareFileId, setCompareFileId] = useState(null)
   const [activeTab, setActiveTab] = useState('table')
+  const [isExporting, setIsExporting] = useState(false)
+  const chartsRef = useRef(null)
 
   const { data: files = [], isLoading: isLoadingFiles } = useQuery({
     queryKey: ['teams_app_files'],
@@ -112,10 +181,106 @@ export default function TeamsAppActivityPage() {
     const file1 = files.find(f => f.id === selectedFileId)
     const file2 = files.find(f => f.id === compareFileId)
     return {
-      file1Label: selectedFileId === null ? 'All Files' : (file1 ? `${file1.from_month || ''} to ${file1.to_month || ''}` : 'File 1'),
-      file2Label: compareFileId === null ? 'All Files' : (file2 ? `${file2.from_month || ''} to ${file2.to_month || ''}` : 'File 2')
+      file1Label: selectedFileId === null ? 'All Files' : (file1 ? formatMonthRange(file1.from_month, file1.to_month) || 'File 1' : 'File 1'),
+      file2Label: compareFileId === null ? 'All Files' : (file2 ? formatMonthRange(file2.from_month, file2.to_month) || 'File 2' : 'File 2')
     }
   }, [files, selectedFileId, compareFileId])
+
+  // Download chart as PNG
+  const downloadChartAsPNG = async () => {
+    try {
+      const chartElement = chartsRef.current
+      if (!chartElement) {
+        alert('Charts not found')
+        return
+      }
+
+      setIsExporting(true)
+      
+      // Wait a bit for chart to render
+      await new Promise(resolve => setTimeout(resolve, 500))
+      
+      const canvas = await html2canvas(chartElement, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff',
+        imageTimeout: 10000,
+      })
+      
+      const imgData = canvas.toDataURL('image/png', 1.0)
+      const link = document.createElement('a')
+      const file1Label = fileLabels.file1Label.replace(/[^a-z0-9._-]/gi, '_')
+      const fileName = `Teams_App_Activity_${compareMode ? `${file1Label}_vs_${fileLabels.file2Label.replace(/[^a-z0-9._-]/gi, '_')}` : file1Label}_${new Date().toISOString().split('T')[0]}.png`
+      link.download = fileName
+      link.href = imgData
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+    } catch (error) {
+      console.error('Error downloading chart:', error)
+      alert('Error downloading chart: ' + error.message)
+    } finally {
+      setIsExporting(false)
+    }
+  }
+
+  // Export to PDF (includes charts)
+  const exportToPDF = async () => {
+    try {
+      setIsExporting(true)
+      
+      const pdf = new jsPDF('landscape', 'mm', 'a4')
+      const pdfWidth = pdf.internal.pageSize.getWidth()
+      
+      // Wait for elements to render
+      await new Promise(resolve => setTimeout(resolve, 500))
+      
+      if (!chartsRef.current || tableData.length === 0) {
+        throw new Error('No charts available to export')
+      }
+      
+      // Scroll element into view
+      chartsRef.current.scrollIntoView({ behavior: 'instant', block: 'center' })
+      await new Promise(resolve => setTimeout(resolve, 300))
+      
+      const canvas = await html2canvas(chartsRef.current, {
+        scale: 1.5,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff',
+        imageTimeout: 10000,
+      })
+      
+      const imgData = canvas.toDataURL('image/jpeg', 0.9)
+      const imgWidth = pdfWidth - 20
+      const imgHeight = (canvas.height * imgWidth) / canvas.width
+      
+      // Add title
+      pdf.setFontSize(16)
+      pdf.setFont('helvetica', 'bold')
+      pdf.text('Teams App Activity Report', pdfWidth / 2, 15, { align: 'center' })
+      
+      // Add file info
+      pdf.setFontSize(10)
+      pdf.setFont('helvetica', 'normal')
+      const fileInfo = compareMode 
+        ? `File 1: ${fileLabels.file1Label} | File 2: ${fileLabels.file2Label}`
+        : `File: ${fileLabels.file1Label}`
+      pdf.text(fileInfo, pdfWidth / 2, 22, { align: 'center' })
+      
+      // Add chart image
+      pdf.addImage(imgData, 'JPEG', 10, 28, imgWidth, imgHeight)
+      
+      const dateStr = new Date().toISOString().split('T')[0]
+      pdf.save(`Teams_App_Activity_${dateStr}.pdf`)
+    } catch (error) {
+      console.error('Error exporting PDF:', error)
+      alert('Error exporting PDF: ' + error.message)
+    } finally {
+      setIsExporting(false)
+    }
+  }
 
   if (isLoading) {
     return (
@@ -134,6 +299,9 @@ export default function TeamsAppActivityPage() {
         <h2 className="text-2xl font-bold text-gray-900">Teams App Activity</h2>
         <p className="text-gray-600 mt-1">View Teams application usage metrics</p>
       </div>
+
+      {/* License cards */}
+      <TeamsLicenseCards />
 
       {/* Tabs */}
       <div className="card">
@@ -164,8 +332,8 @@ export default function TeamsAppActivityPage() {
       </div>
 
       {/* Filters */}
-      <div className="card p-4 space-y-4">
-        <div className="flex items-center gap-3">
+      <div className="card p-6 bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200 shadow-lg space-y-4">
+        <div className="flex items-center gap-3 pb-3 border-b border-blue-200">
           <label className="inline-flex items-center cursor-pointer">
             <input
               type="checkbox"
@@ -174,45 +342,49 @@ export default function TeamsAppActivityPage() {
                 setCompareMode(e.target.checked)
                 if (!e.target.checked) setCompareFileId(null)
               }}
-              className="form-checkbox h-4 w-4 text-blue-600 rounded"
+              className="h-5 w-5 text-blue-600 rounded border-2 border-gray-300 focus:ring-2 focus:ring-blue-500"
             />
-            <span className="ml-2 text-sm font-medium text-gray-700">Enable Comparison Mode</span>
+            <span className="ml-2 text-base font-semibold text-gray-800">Enable Comparison Mode</span>
           </label>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label htmlFor="fileSelect" className="block text-sm font-medium text-gray-700 mb-1">
+          <div className="bg-white rounded-lg p-3 border-2 border-blue-300 shadow-sm">
+            <label htmlFor="fileSelect" className="block text-sm font-semibold text-gray-800 mb-2 flex items-center gap-2">
+              <span className="lnr lnr-file-empty text-blue-600"></span>
               {compareMode ? 'App Usage File 1' : 'App Usage File'}
             </label>
             <select
               id="fileSelect"
               value={selectedFileId || ''}
               onChange={(e) => setSelectedFileId(e.target.value ? parseInt(e.target.value) : null)}
-              className="form-select w-full"
+              className="w-full px-4 py-2.5 border-2 border-gray-300 rounded-md bg-white text-gray-900 font-medium focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all shadow-sm hover:border-blue-400"
             >
               <option value="">All Files</option>
               {files.map(f => (
                 <option key={f.id} value={f.id}>
-                  {f.filename} ({f.from_month && f.to_month ? `${f.from_month} to ${f.to_month}` : 'No date range'})
+                  {formatMonthRange(f.from_month, f.to_month) || f.filename}
                 </option>
               ))}
             </select>
           </div>
 
           {compareMode && (
-            <div>
-              <label htmlFor="compareFileSelect" className="block text-sm font-medium text-gray-700 mb-1">App Usage File 2</label>
+            <div className="bg-white rounded-lg p-3 border-2 border-blue-400 shadow-sm">
+              <label htmlFor="compareFileSelect" className="block text-sm font-semibold text-gray-800 mb-2 flex items-center gap-2">
+                <span className="lnr lnr-file-empty text-blue-600"></span>
+                App Usage File 2
+              </label>
               <select
                 id="compareFileSelect"
                 value={compareFileId || ''}
                 onChange={(e) => setCompareFileId(e.target.value ? parseInt(e.target.value) : null)}
-                className="form-select w-full border-2 border-blue-300"
+                className="w-full px-4 py-2.5 border-2 border-blue-400 rounded-md bg-white text-gray-900 font-medium focus:border-blue-600 focus:ring-2 focus:ring-blue-300 transition-all shadow-sm hover:border-blue-500"
               >
                 <option value="">Select file to compare</option>
                 {files.filter(f => f.id !== selectedFileId).map(f => (
                   <option key={f.id} value={f.id}>
-                    {f.filename} ({f.from_month && f.to_month ? `${f.from_month} to ${f.to_month}` : 'No date range'})
+                    {formatMonthRange(f.from_month, f.to_month) || f.filename}
                   </option>
                 ))}
               </select>
@@ -234,8 +406,42 @@ export default function TeamsAppActivityPage() {
         <div className="card p-6">
           <h3 className="text-lg font-semibold text-gray-800 mb-4">Teams App Activity Charts</h3>
           
+          {/* Export Options */}
+          <div className="mb-6 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-sm font-semibold text-gray-800">Export Options</h4>
+                <p className="text-xs text-gray-600 mt-1">Download charts and reports</p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={downloadChartAsPNG}
+                  disabled={isExporting}
+                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2 shadow-sm"
+                  title="Download charts as PNG"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                  </svg>
+                  Download PNG
+                </button>
+                <button
+                  onClick={exportToPDF}
+                  disabled={isExporting}
+                  className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2 shadow-sm"
+                  title="Export charts to PDF"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                  </svg>
+                  Export PDF
+                </button>
+              </div>
+            </div>
+          </div>
+          
           {/* Charts Side by Side */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div ref={chartsRef} className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Teams Using App Chart */}
             <div>
               <h4 className="text-md font-semibold text-gray-700 mb-3">Teams Using App</h4>

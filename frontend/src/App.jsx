@@ -11,6 +11,7 @@ const PAGE_TITLES = {
   '/attendance/work-hour': 'Work Hour Completion',
   '/attendance/work-hour-lost': 'Work Hour Lost',
   '/attendance/leave-analysis': 'Leave Analysis',
+  '/attendance/user-wise': 'User Wise',
 }
 
 function App() {

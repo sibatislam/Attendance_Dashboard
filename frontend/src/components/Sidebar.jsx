@@ -44,12 +44,26 @@ export default function Sidebar() {
           <span>Back to Modules</span>
         </Link>
         {hasPermission('dashboard') && (
-          <NavLink to="/attendance/dashboard" className={linkClass}>
-            <span className="flex items-center gap-3">
-              <span className="lnr lnr-chart-bars"></span>
-              <span>Dashboard</span>
-            </span>
-          </NavLink>
+          <>
+            <NavLink to="/attendance/dashboard" className={linkClass}>
+              <span className="flex items-center gap-3">
+                <span className="lnr lnr-chart-bars"></span>
+                <span>Dashboard</span>
+              </span>
+            </NavLink>
+            <NavLink to="/attendance/weekly-dashboard" className={linkClass}>
+              <span className="flex items-center gap-3">
+                <span className="lnr lnr-chart-bars"></span>
+                <span>Weekly Dashboard</span>
+              </span>
+            </NavLink>
+            <NavLink to="/attendance/user-wise" className={linkClass}>
+              <span className="flex items-center gap-3">
+                <span className="lnr lnr-users"></span>
+                <span>User Wise</span>
+              </span>
+            </NavLink>
+          </>
         )}
         {hasPermission('on_time') && (
           <NavLink to="/attendance/on-time" className={linkClass}>
@@ -79,7 +93,7 @@ export default function Sidebar() {
           <NavLink to="/attendance/leave-analysis" className={linkClass}>
             <span className="flex items-center gap-3">
               <span className="lnr lnr-users"></span>
-              <span>Leave Analysis</span>
+              <span>Leave Analysis Adjacent to Weekend and Holiday</span>
             </span>
           </NavLink>
         )}
@@ -87,6 +101,12 @@ export default function Sidebar() {
           <span className="flex items-center gap-3">
             <span className="lnr lnr-briefcase"></span>
             <span>OD Analysis</span>
+          </span>
+        </NavLink>
+        <NavLink to="/attendance/weekly-analysis" className={linkClass}>
+          <span className="flex items-center gap-3">
+            <span className="lnr lnr-calendar-full"></span>
+            <span>Weekly Analysis</span>
           </span>
         </NavLink>
         {hasPermission('upload') && (

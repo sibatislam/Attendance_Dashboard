@@ -26,7 +26,7 @@ console.log('[API] Final API_BASE:', API_BASE)
 
 export const api = axios.create({
   baseURL: API_BASE,
-  timeout: 30000, // 30 seconds timeout
+  timeout: 120000, // 120 seconds (2 minutes) timeout for large data processing
 })
 
 // Add token to requests if available
@@ -155,6 +155,15 @@ export async function getLeaveAnalysis(groupBy) {
   }
 }
 
+export async function getWeeklyAnalysis(groupBy) {
+  try {
+    const { data } = await api.get(`/work_hour/weekly/${groupBy}`)
+    return data
+  } catch (e) {
+    throw e
+  }
+}
+
 export async function getODAnalysis(groupBy) {
   const { data } = await api.get(`/work_hour/od/${groupBy}`)
   return data
@@ -208,6 +217,57 @@ export async function updateUser(userId, userData) {
 
 export async function deleteUser(userId) {
   const { data } = await api.delete(`/users/${userId}`)
+  return data
+}
+
+/** Bulk delete users by IDs. Returns { deleted, skipped }. Skips self and admins. */
+export async function deleteUsers(userIds) {
+  const { data } = await api.post('/users/bulk-delete', { user_ids: userIds })
+  return data
+}
+
+/** Download Excel template for bulk user upload. Columns: Employee Name, Designation, Function, Email (Official), Username. */
+export async function downloadUserBulkTemplate() {
+  const { data } = await api.get('/users/bulk-upload/template', { responseType: 'blob' })
+  const url = URL.createObjectURL(new Blob([data]))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'bulk_users_template.xlsx'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
+/** Bulk create users from Excel. Default password: 123456. Returns { created, skipped, errors, details }. */
+export async function bulkUploadUsers(file) {
+  const form = new FormData()
+  form.append('file', file)
+  const { data } = await api.post('/users/bulk-upload', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  return data
+}
+
+// ===== Roles API (Admin) =====
+
+export async function getRoles() {
+  const { data } = await api.get('/roles/')
+  return data
+}
+
+export async function createRole(payload) {
+  const { data } = await api.post('/roles/', payload)
+  return data
+}
+
+export async function updateRole(roleId, payload) {
+  const { data } = await api.put(`/roles/${roleId}`, payload)
+  return data
+}
+
+export async function deleteRole(roleId) {
+  const { data } = await api.delete(`/roles/${roleId}`)
   return data
 }
 
@@ -351,14 +411,35 @@ export async function getTeamsAppFileDetail(id) {
 }
 
 export async function deleteTeamsAppFiles(ids) {
-  const { data } = await api.delete('/teams/app/files/', { data: { file_ids: ids } })
-  return data
+  // Use POST instead of DELETE for better compatibility with request bodies
+  // Some HTTP clients/proxies don't support DELETE with request bodies
+  try {
+    const { data } = await api.post('/teams/app/files/delete', { file_ids: ids })
+    return data
+  } catch (error) {
+    // Fallback to DELETE if POST fails
+    console.warn('POST delete failed, trying DELETE:', error)
+    const { data } = await api.delete('/teams/app/files/', { data: { file_ids: ids } })
+    return data
+  }
 }
 
 export async function getTeamsAppActivity(fileId) {
   const params = {}
   if (fileId) params.file_id = fileId
   const { data } = await api.get('/teams/app/analytics/app-activity', { params })
+  return data
+}
+
+// ===== Teams License APIs =====
+
+export async function getTeamsLicense() {
+  const { data } = await api.get('/teams/license/')
+  return data
+}
+
+export async function updateTeamsLicense(licenseData) {
+  const { data } = await api.put('/teams/license/', licenseData)
   return data
 }
 

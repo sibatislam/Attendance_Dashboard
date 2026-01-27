@@ -1,8 +1,10 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from .db import Base, engine
-# Import KPI models to ensure tables are created
+# Import KPI and app models to ensure tables are created
+from .models import Role, TeamsLicense
 from .models_kpi import OnTimeKPI, WorkHourKPI, WorkHourLostKPI, LeaveAnalysisKPI
 from .routers.upload import router as upload_router
 from .routers.files import router as files_router
@@ -19,6 +21,7 @@ from .routers.teams_app_analytics import router as teams_app_analytics_router
 from .routers.employee_upload import router as employee_upload_router
 from .routers.employee_files import router as employee_files_router
 from .routers.cxo import router as cxo_router
+from .routers.teams_license import router as teams_license_router
 
 # Import auth routers with error handling
 try:
@@ -35,18 +38,37 @@ except Exception as e:
     print(f"✗ Failed to import users router: {e}")
     users_router = None
 
+try:
+    from .routers.roles import router as roles_router
+    print("✓ Roles router imported successfully")
+except Exception as e:
+    print(f"✗ Failed to import roles router: {e}")
+    roles_router = None
+
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Attendance Monitoring Dashboard API", version="1.0.0")
 
-    # CORS for local frontend
-    origins = ["*"]  # dev: allow all; tighten in prod
+    # CORS for local frontend (cannot use "*" with allow_credentials=True)
+    # Add your local IP address here to allow access from other devices on your network
+    origins = [
+        "http://localhost:5174",
+        "http://localhost:5173",
+        "http://127.0.0.1:5174",
+        "http://127.0.0.1:5173",
+        "http://172.16.85.189:5174",
+        "http://172.16.85.189:5173",
+        # Add more IPs here if needed, e.g.:
+        # "http://192.168.1.100:5174",
+        # "http://192.168.1.100:5173",
+    ]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["*"],
     )
 
     # Ensure tables exist
@@ -59,7 +81,11 @@ def create_app() -> FastAPI:
     if users_router:
         app.include_router(users_router, prefix="/users", tags=["users"])
         print("✓ Users routes registered at /users")
-    
+    if roles_router:
+        app.include_router(roles_router, prefix="/roles", tags=["roles"])
+        print("✓ Roles routes registered at /roles")
+
+    if users_router:
         # Attendance module routers
         app.include_router(upload_router, prefix="/upload", tags=["upload"])
         app.include_router(files_router, prefix="/files", tags=["files"])
@@ -82,6 +108,9 @@ def create_app() -> FastAPI:
         
         # CXO Management router
         app.include_router(cxo_router, prefix="/cxo", tags=["cxo"])
+        
+        # Teams License router
+        app.include_router(teams_license_router, prefix="/teams/license", tags=["teams-license"])
 
     @app.get("/health")
     def health():
@@ -104,6 +133,17 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+
+@app.exception_handler(Exception)
+def global_exception_handler(request, exc):
+    """Return JSON for all errors so CORS middleware adds headers."""
+    if isinstance(exc, HTTPException):
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    import traceback
+    traceback.print_exc()
+    return JSONResponse(status_code=500, content={"detail": str(exc)})
+
 
 # Initialize default admin user after app creation
 from .init_db import init_db

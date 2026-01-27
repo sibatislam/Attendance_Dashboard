@@ -152,6 +152,11 @@ def compute_work_hour_lost(db: Session, group_by: str) -> List[Dict[str, Any]]:
         member_id = emp_code or emp_name
 
         flag = str(r.get("Flag", "")).strip()
+        
+        # Skip weekends and holidays (Flag="W" or "H") for work hour lost calculations
+        if flag == "W" or flag == "H":
+            continue
+        
         shift_in = str(r.get("Shift In Time", "")).strip()
         shift_out = str(r.get("Shift Out Time", "")).strip()
         in_time = str(r.get("In Time", "")).strip()

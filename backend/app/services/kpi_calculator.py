@@ -33,10 +33,12 @@ def _extract_month(date_str: str) -> str:
     month_map = {
         'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
         'jul': 7, 'aug': 8, 'sep': 9, 'sept': 9, 'oct': 10, 'nov': 11, 'dec': 12,
+        'january': 1, 'february': 2, 'march': 3, 'april': 4, 'june': 6, 'july': 7,
+        'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12,
     }
     lower = s.lower()
     ym = re.search(r"(20\d{2})", lower)
-    mm = re.search(r"(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)", lower)
+    mm = re.search(r"(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)", lower)
     if ym and mm:
         return f"{ym.group(1)}-{month_map[mm.group(1)]:02d}"
     return s
@@ -192,6 +194,10 @@ def _calculate_work_hour_kpi(db: Session, file_id: int, group_by: str, rows: Lis
         member_id = emp_code or emp_name
         flag = str(r.get("Flag", "")).strip()
         
+        # Skip weekends and holidays (Flag="W" or "H") for work hour calculations
+        if flag == "W" or flag == "H":
+            continue
+        
         key = (month, group_val)
         if member_id:
             members[key].add(member_id)
@@ -278,6 +284,10 @@ def _calculate_work_hour_lost_kpi(db: Session, file_id: int, group_by: str, rows
         emp_name = str(r.get("Name", "")).strip()
         member_id = emp_code or emp_name
         flag = str(r.get("Flag", "")).strip()
+        
+        # Skip weekends and holidays (Flag="W" or "H") for work hour lost calculations
+        if flag == "W" or flag == "H":
+            continue
         
         key = (month, group_val)
         if member_id:
