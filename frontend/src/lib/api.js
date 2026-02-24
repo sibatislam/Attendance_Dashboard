@@ -5,15 +5,15 @@ import { computeWorkHourLost } from './workHourLost'
 import { computeLeaveAnalysis } from './leaveAnalysis'
 
 // Auto-detect API base URL: use same hostname as frontend
-// This allows the app to work both locally and from other PCs on the network
+// Backend must be running (e.g. scripts\windows\run_backend.bat → port 8081).
+// Override with VITE_API_BASE in frontend .env if your backend uses another port.
 const getApiBase = () => {
   // Allow override via environment variable
   if (import.meta.env.VITE_API_BASE) {
     console.log('[API] Using VITE_API_BASE:', import.meta.env.VITE_API_BASE)
     return import.meta.env.VITE_API_BASE
   }
-  
-  // Use the same hostname as the frontend, but with backend port
+  // Use the same hostname as the frontend, but with backend port (default 8081)
   const hostname = window.location.hostname
   const protocol = window.location.protocol
   const apiBase = `${protocol}//${hostname}:8081`
@@ -38,10 +38,13 @@ api.interceptors.request.use((config) => {
   return config
 })
 
-// Handle 401 errors globally
+// Handle 401 and connection errors globally
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    if (error.code === 'ERR_NETWORK' || error.code === 'ERR_EMPTY_RESPONSE' || error.message === 'Network Error' || !error.response) {
+      console.error('[API] Cannot reach backend at', API_BASE, '— is it running? Start with: scripts\\windows\\run_backend.bat')
+    }
     if (error.response?.status === 401) {
       // Token expired or invalid
       localStorage.removeItem('token')
@@ -155,13 +158,39 @@ export async function getLeaveAnalysis(groupBy) {
   }
 }
 
-export async function getWeeklyAnalysis(groupBy) {
+export async function getWeeklyAnalysis(groupBy, breakdown = null) {
   try {
-    const { data } = await api.get(`/work_hour/weekly/${groupBy}`)
+    const url = breakdown
+      ? `/work_hour/weekly/${groupBy}?breakdown=${encodeURIComponent(breakdown)}`
+      : `/work_hour/weekly/${groupBy}`
+    const { data } = await api.get(url)
     return data
   } catch (e) {
     throw e
   }
+}
+
+// ===== App Config (CTC per hour for cost calculations) =====
+
+export async function getCtcPerHour() {
+  const { data } = await api.get('/config/ctc-per-hour')
+  return data
+}
+
+export async function setCtcPerHour(value) {
+  const { data } = await api.put('/config/ctc-per-hour', { value })
+  return data
+}
+
+/** Function-wise average CTC per employee per hour (BDT). Returns { functions, ctc_by_function }. */
+export async function getCtcPerHourByFunction() {
+  const { data } = await api.get('/config/ctc-per-hour-by-function')
+  return data
+}
+
+export async function setCtcPerHourByFunction(ctcByFunction) {
+  const { data } = await api.put('/config/ctc-per-hour-by-function', { ctc_by_function: ctcByFunction })
+  return data
 }
 
 export async function getODAnalysis(groupBy) {
@@ -223,6 +252,20 @@ export async function deleteUser(userId) {
 /** Bulk delete users by IDs. Returns { deleted, skipped }. Skips self and admins. */
 export async function deleteUsers(userIds) {
   const { data } = await api.post('/users/bulk-delete', { user_ids: userIds })
+  return data
+}
+
+/** Get allowed_companies, allowed_functions, allowed_departments from hierarchy for an employee + level. Admin only. */
+export async function getScopeFromHierarchy(employeeEmail, dataScopeLevel, employeeFileId = null) {
+  const params = new URLSearchParams({ employee_email: employeeEmail, data_scope_level: dataScopeLevel })
+  if (employeeFileId != null) params.set('employee_file_id', String(employeeFileId))
+  const { data } = await api.get(`/users/scope-from-hierarchy?${params.toString()}`)
+  return data
+}
+
+/** Sync each user's role and data_scope_level from Employee List hierarchy (N, N-1, N-2). Admin only. */
+export async function syncUsersRolesFromHierarchy() {
+  const { data } = await api.post('/users/sync-roles-from-hierarchy')
   return data
 }
 
@@ -299,9 +342,10 @@ export async function deleteTeamsFiles(ids) {
   return data
 }
 
-export async function getTeamsUserActivity(fileId) {
+export async function getTeamsUserActivity(fileId, employeeFileId = null) {
   const params = {}
   if (fileId) params.file_id = fileId
+  if (employeeFileId) params.employee_file_id = employeeFileId
   const { data } = await api.get('/teams/analytics/user-activity', { params })
   return data
 }
@@ -387,6 +431,34 @@ export async function deleteEmployeeFiles(ids) {
   return data
 }
 
+/** Employee list with N, N-1, N-2 hierarchy (admin). Optional employeeFileId. */
+export async function getEmployeeHierarchy(employeeFileId = null) {
+  const params = employeeFileId != null ? { employee_file_id: employeeFileId } : {}
+  const { data } = await api.get('/employee/files/hierarchy', { params })
+  return data
+}
+
+/** Unique functions, departments, companies from employee list (admin; for user form multi-select). */
+export async function getScopeOptions(employeeFileId = null) {
+  const params = employeeFileId != null ? { employee_file_id: employeeFileId } : {}
+  const { data } = await api.get('/employee/files/scope-options', { params })
+  return data
+}
+
+/** Raw row from Employee List file for an email (shows exact column names and values from the Excel). */
+export async function getEmployeeRowByEmail(email, employeeFileId = null) {
+  const params = { email }
+  if (employeeFileId != null) params.employee_file_id = employeeFileId
+  const { data } = await api.get('/employee/files/row-by-email', { params })
+  return data
+}
+
+/** Current user data scope: N = all, N-1 = function + depts, N-2 = department only; visible_tabs. */
+export async function getMyScope() {
+  const { data } = await api.get('/users/me/scope')
+  return data
+}
+
 // ===== Teams App Usage APIs =====
 
 export async function uploadTeamsAppFiles(files, fromMonth, toMonth) {
@@ -440,6 +512,22 @@ export async function getTeamsLicense() {
 
 export async function updateTeamsLicense(licenseData) {
   const { data } = await api.put('/teams/license/', licenseData)
+  return data
+}
+
+/** Upload MS Teams User List Excel (Teams + CBL_Teams sheets). Returns { total_assigned, by_sheet, total_teams, free, rows }. Saves to DB. */
+export async function uploadTeamsUserList(file) {
+  const form = new FormData()
+  form.append('file', file)
+  const { data } = await api.post('/teams/user-list/upload', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  return data
+}
+
+/** Get the latest Teams User List from the database (persisted from last upload). */
+export async function getLatestTeamsUserList() {
+  const { data } = await api.get('/teams/user-list/latest')
   return data
 }
 

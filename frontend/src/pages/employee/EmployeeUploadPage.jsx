@@ -13,6 +13,8 @@ export default function EmployeeUploadPage() {
       alert(`Successfully uploaded ${data.length} employee file(s)!`)
       setFiles([])
       queryClient.invalidateQueries({ queryKey: ['employee_files'] })
+      queryClient.invalidateQueries({ queryKey: ['employeeHierarchy'] })
+      queryClient.invalidateQueries({ queryKey: ['scopeOptions'] })
     },
     onError: (error) => {
       alert('Upload failed: ' + (error.response?.data?.detail || error.message))

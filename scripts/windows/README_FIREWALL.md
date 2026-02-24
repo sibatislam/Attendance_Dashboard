@@ -38,10 +38,10 @@
 ## Verify It Worked:
 From another PC/laptop, test:
 ```powershell
-Test-NetConnection 172.16.50.50 -Port 8081
+Test-NetConnection 172.16.85.189 -Port 8081
 ```
 Should show: `TcpTestSucceeded : True`
 
 ## After Opening the Port:
 - Restart the backend if needed
-- Try logging in from any PC at: `http://172.16.50.50:5173/login`
+- Colleagues can login at: http://172.16.85.189:5174/login

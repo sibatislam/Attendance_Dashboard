@@ -40,7 +40,12 @@ export default function TeamsDashboardPage() {
 
   useEffect(() => {
     if (files.length > 0 && selectedFileId === null && !hasInitializedFiles.current) {
-      setSelectedFileId(files[0].id)
+      const sorted = [...files].sort((a, b) => {
+        const monthA = a.to_month || a.from_month || ''
+        const monthB = b.to_month || b.from_month || ''
+        return monthB.localeCompare(monthA)
+      })
+      setSelectedFileId(sorted[0].id)
       hasInitializedFiles.current = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -146,8 +151,11 @@ export default function TeamsDashboardPage() {
         {activeTab === 'user' && (
           <UserWiseTab 
             files={files}
+            employeeFiles={employeeFiles}
             selectedFileId={selectedFileId}
             setSelectedFileId={setSelectedFileId}
+            selectedEmployeeFileId={selectedEmployeeFileId}
+            setSelectedEmployeeFileId={setSelectedEmployeeFileId}
           />
         )}
 

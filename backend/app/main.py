@@ -1,10 +1,11 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
 from .db import Base, engine
 # Import KPI and app models to ensure tables are created
-from .models import Role, TeamsLicense
+from .models import Role, TeamsLicense, TeamsUserListUpload
 from .models_kpi import OnTimeKPI, WorkHourKPI, WorkHourLostKPI, LeaveAnalysisKPI
 from .routers.upload import router as upload_router
 from .routers.files import router as files_router
@@ -22,6 +23,8 @@ from .routers.employee_upload import router as employee_upload_router
 from .routers.employee_files import router as employee_files_router
 from .routers.cxo import router as cxo_router
 from .routers.teams_license import router as teams_license_router
+from .routers.teams_user_list import router as teams_user_list_router
+from .routers.config import router as config_router
 
 # Import auth routers with error handling
 try:
@@ -50,7 +53,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Attendance Monitoring Dashboard API", version="1.0.0")
 
     # CORS for local frontend (cannot use "*" with allow_credentials=True)
-    # Add your local IP address here to allow access from other devices on your network
+    # Explicit origins + regex so any localhost/127.0.0.1 port works (e.g. 5174, 5173)
     origins = [
         "http://localhost:5174",
         "http://localhost:5173",
@@ -58,13 +61,11 @@ def create_app() -> FastAPI:
         "http://127.0.0.1:5173",
         "http://172.16.85.189:5174",
         "http://172.16.85.189:5173",
-        # Add more IPs here if needed, e.g.:
-        # "http://192.168.1.100:5174",
-        # "http://192.168.1.100:5173",
     ]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -73,6 +74,21 @@ def create_app() -> FastAPI:
 
     # Ensure tables exist
     Base.metadata.create_all(bind=engine)
+
+    # One-time migration: extend app_config.key to 255 chars for function-wise CTC keys
+    try:
+        with engine.connect() as conn:
+            r = conn.execute(text("""
+                SELECT CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'app_config' AND COLUMN_NAME = 'key'
+            """))
+            row = r.fetchone()
+            if row and row[0] is not None and row[0] < 255:
+                conn.execute(text("ALTER TABLE app_config MODIFY COLUMN `key` VARCHAR(255) NOT NULL"))
+                conn.commit()
+                print("✓ app_config.key extended to VARCHAR(255)")
+    except Exception as e:
+        print("Note: app_config key migration skipped:", e)
 
     # Routers
     if auth_router:
@@ -111,6 +127,10 @@ def create_app() -> FastAPI:
         
         # Teams License router
         app.include_router(teams_license_router, prefix="/teams/license", tags=["teams-license"])
+        # MS Teams User List (upload Excel, parse Teams + CBL_Teams sheets)
+        app.include_router(teams_user_list_router, prefix="/teams/user-list", tags=["teams-user-list"])
+        # App config (CTC per hour for cost calculations)
+        app.include_router(config_router, prefix="/config", tags=["config"])
 
     @app.get("/health")
     def health():
@@ -135,14 +155,29 @@ def create_app() -> FastAPI:
 app = create_app()
 
 
+def _cors_headers_for_request(request):
+    """CORS headers using request Origin so error responses are accepted by the browser."""
+    origin = request.headers.get("origin", "http://localhost:5174")
+    return {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers": "*",
+    }
+
+
 @app.exception_handler(Exception)
 def global_exception_handler(request, exc):
-    """Return JSON for all errors so CORS middleware adds headers."""
+    """Return JSON for all errors and ensure CORS headers are present."""
     if isinstance(exc, HTTPException):
-        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
-    import traceback
-    traceback.print_exc()
-    return JSONResponse(status_code=500, content={"detail": str(exc)})
+        r = JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    else:
+        import traceback
+        traceback.print_exc()
+        r = JSONResponse(status_code=500, content={"detail": str(exc)})
+    for k, v in _cors_headers_for_request(request).items():
+        r.headers[k] = v
+    return r
 
 
 # Initialize default admin user after app creation

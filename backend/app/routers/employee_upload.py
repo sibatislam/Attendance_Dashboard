@@ -26,8 +26,8 @@ async def upload_employee_files(
             # Read file content
             file_bytes = await uploaded_file.read()
             
-            # Parse the file
-            headers, rows_data = read_file_preserve_text(uploaded_file.filename, file_bytes)
+            # Parse the file (data_only=True so we get displayed values, not formulas)
+            headers, rows_data = read_file_preserve_text(uploaded_file.filename, file_bytes, data_only=True)
             
             # Create file record
             db_file = EmployeeUploadedFile(

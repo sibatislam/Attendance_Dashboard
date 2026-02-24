@@ -10,14 +10,65 @@ from ..auth import get_current_user
 router = APIRouter()
 
 
+# Only include users whose Assigned Products (in activity file) contains MICROSOFT TEAMS ESSENTIALS
+_TEAMS_ESSENTIALS = "microsoft teams essentials"
+
+
+def _row_has_teams_essentials(data: dict) -> bool:
+    """
+    True if row should be included: either no Assigned Products column (backward compat),
+    or Assigned Products contains MICROSOFT TEAMS ESSENTIALS (e.g. with POWER AUTOMATE, FABRIC, etc.).
+    """
+    if not data:
+        return False
+    for key, value in data.items():
+        key_lower = str(key).strip().lower()
+        if "assigned" in key_lower and "product" in key_lower:
+            val = (str(value) if value is not None else "").strip().lower()
+            return _TEAMS_ESSENTIALS in val
+    return True  # No Assigned Products column: include row
+
+
+def _row_is_licensed_yes(data: dict) -> bool:
+    """True if row has no 'Is Licensed' column or its value is 'Yes' (case-insensitive)."""
+    if not data:
+        return False
+    for key, value in data.items():
+        key_lower = str(key).strip().lower()
+        if key_lower.replace(" ", "") == "islicensed":
+            val = (str(value) if value is not None else "").strip().lower()
+            return val == "yes"
+    return True  # No Is Licensed column: include row
+
+
+def _build_email_to_employee(employee_files, db) -> dict:
+    """Build mapping email (lower) -> { function, department } from employee file(s)."""
+    out = {}
+    for emp_file in employee_files:
+        emp_rows = db.query(EmployeeUploadedRow).filter(EmployeeUploadedRow.file_id == emp_file.id).all()
+        for row in emp_rows:
+            data = row.data or {}
+            email = (data.get('Email (Offical)') or data.get('Email (Official)') or '').strip()
+            if not email:
+                continue
+            email_lower = email.lower()
+            out[email_lower] = {
+                'function': (data.get('Function') or '').strip() or 'Unknown',
+                'department': (data.get('Department') or '').strip() or 'Unknown',
+            }
+    return out
+
+
 @router.get("/user-activity")
 def get_user_activity(
     file_id: Optional[int] = Query(None),
+    employee_file_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
     """
     Get user-wise activity data from uploaded files.
+    If employee_file_id is provided, each row is enriched with function and department from the employee file.
     Returns activity metrics for each user.
     """
     # Get files
@@ -29,6 +80,12 @@ def get_user_activity(
     if not files:
         return []
     
+    # Optional: enrich with function/department from employee file
+    email_to_employee = {}
+    if employee_file_id:
+        employee_files = db.query(EmployeeUploadedFile).filter(EmployeeUploadedFile.id == employee_file_id).all()
+        email_to_employee = _build_email_to_employee(employee_files, db)
+    
     result = []
     
     for file in files:
@@ -37,9 +94,15 @@ def get_user_activity(
         
         for row in rows:
             data = row.data
-            
+            if not _row_has_teams_essentials(data):
+                continue
+            if not _row_is_licensed_yes(data):
+                continue
+
             # Extract user email from User Principal Name
             user_email = data.get('User Principal Name', 'Unknown')
+            user_email_lower = (user_email or '').strip().lower()
+            emp = email_to_employee.get(user_email_lower) if email_to_employee else None
             
             # Create user activity record
             user_activity = {
@@ -49,6 +112,8 @@ def get_user_activity(
                 'to_month': file.to_month,
                 'month_range': f"{file.from_month} to {file.to_month}" if file.from_month and file.to_month else file.from_month or file.to_month or 'N/A',
                 'user': user_email,
+                'function': emp.get('function', 'Unknown') if emp else 'Unknown',
+                'department': emp.get('department', 'Unknown') if emp else 'Unknown',
                 'Team Chat': 0,
                 'Private Chat': 0,
                 'Calls': 0,
@@ -164,6 +229,10 @@ def get_function_activity(
         
         for row in teams_rows:
             data = row.data
+            if not _row_has_teams_essentials(data):
+                continue
+            if not _row_is_licensed_yes(data):
+                continue
             user_email = data.get('User Principal Name', '').strip().lower()
             
             # Match with employee data
@@ -286,6 +355,10 @@ def get_company_activity(
         
         for row in teams_rows:
             data = row.data
+            if not _row_has_teams_essentials(data):
+                continue
+            if not _row_is_licensed_yes(data):
+                continue
             user_email = data.get('User Principal Name', '').strip().lower()
             
             # Match with employee data
@@ -395,6 +468,10 @@ def get_cxo_activity(
         
         for row in rows:
             data = row.data
+            if not _row_has_teams_essentials(data):
+                continue
+            if not _row_is_licensed_yes(data):
+                continue
             
             # Extract user email from User Principal Name
             user_email = data.get('User Principal Name', 'Unknown').strip().lower()

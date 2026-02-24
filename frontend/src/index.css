@@ -11,6 +11,45 @@ html, body, #root { height: 100%; }
 .th { @apply sticky top-0 backdrop-blur-md bg-white/30 text-left text-xs font-medium text-gray-700 uppercase tracking-wider; }
 .td { @apply whitespace-nowrap text-sm text-gray-900; }
 
+/* Force wrap in table cells - overrides .td; width auto-adjusts within range */
+.td-wrap-cell {
+  white-space: normal !important;
+  word-break: break-word !important;
+  overflow-wrap: break-word !important;
+  min-width: 140px;
+  max-width: 280px;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+.td-wrap-cell > .td-wrap-inner {
+  display: block;
+  white-space: normal !important;
+  word-break: break-word !important;
+  overflow-wrap: break-word !important;
+}
+
+/* Narrow columns for numeric/short data */
+.td-compact {
+  width: 88px;
+  min-width: 88px;
+  max-width: 88px;
+  overflow: hidden;
+  box-sizing: border-box;
+  text-align: center;
+}
+.th-compact {
+  width: 88px;
+  min-width: 88px;
+  max-width: 88px;
+  text-align: center;
+}
+
+/* Day-wise detail modal: force center align headers and cells */
+.day-wise-detail-table th,
+.day-wise-detail-table td {
+  text-align: center !important;
+}
+
 @keyframes slide-in {
   from {
     width: 0;

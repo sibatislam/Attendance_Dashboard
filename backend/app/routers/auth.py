@@ -1,4 +1,5 @@
 """Authentication endpoints for login and registration."""
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -12,6 +13,7 @@ from ..auth import (
     create_access_token,
     get_current_user,
 )
+from ..utils import datetime_to_iso_utc
 from .roles import get_permissions_for_role
 
 router = APIRouter()
@@ -33,9 +35,9 @@ def _user_to_response(user: User, db: Session):
         "role": user.role or "user",
         "is_active": user.is_active,
         "permissions": perms,
-        "last_login": user.last_login.isoformat() if user.last_login else None,
-        "created_at": user.created_at.isoformat() if user.created_at else None,
-        "updated_at": user.updated_at.isoformat() if user.updated_at else None,
+        "last_login": datetime_to_iso_utc(user.last_login),
+        "created_at": datetime_to_iso_utc(user.created_at),
+        "updated_at": datetime_to_iso_utc(user.updated_at),
     }
 
 
@@ -102,6 +104,11 @@ def login(credentials: LoginRequest, db: Session = Depends(get_db)):
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account is inactive"
         )
+    
+    # Update last login timestamp
+    user.last_login = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(user)
     
     # Create access token (sub must be a string)
     access_token = create_access_token(data={"sub": str(user.id)})

@@ -1,10 +1,11 @@
-import { useState, useMemo, useRef } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { getTeamsUserActivity } from '../../../lib/api'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, CartesianGrid, LabelList } from 'recharts'
 import html2canvas from 'html2canvas'
 import jsPDF from 'jspdf'
 import TeamsLicenseCards from '../../../components/TeamsLicenseCards'
+import MultiSelectSearchable from '../../../components/MultiSelectSearchable'
 
 // Helper function to format month string to "MonthName Year" format
 const formatMonthWithYear = (monthStr) => {
@@ -70,17 +71,35 @@ const formatMonthRange = (fromMonth, toMonth) => {
   return ''
 }
 
-export default function UserWiseTab({ files, selectedFileId, setSelectedFileId }) {
+export default function UserWiseTab({ files, employeeFiles, selectedFileId, setSelectedFileId, selectedEmployeeFileId, setSelectedEmployeeFileId }) {
   const [compareMode, setCompareMode] = useState(false)
   const [compareFileId, setCompareFileId] = useState(null)
-  const [selectedUser, setSelectedUser] = useState('')
+  const [selectedUsers, setSelectedUsers] = useState([])
+  const [selectedFunctions, setSelectedFunctions] = useState([])
+  const [selectedDepartments, setSelectedDepartments] = useState([])
   const [isExporting, setIsExporting] = useState(false)
+  const [chartsToShow, setChartsToShow] = useState(5)
   const chartRef = useRef(null)
+
+  const INITIAL_CHARTS = 5
+  const LOAD_MORE_STEP = 5
+
+  // When function filter changes, clear department and user filters so options stay in sync
+  useEffect(() => {
+    setSelectedDepartments([])
+    setSelectedUsers([])
+  }, [selectedFunctions])
+
+  // When department filter changes, clear user filter so options stay in sync
+  useEffect(() => {
+    setSelectedUsers([])
+  }, [selectedDepartments])
+
   const statsRef = useRef(null)
 
   const { data: userData = [], isLoading: isLoadingData } = useQuery({
-    queryKey: ['teams_user_activity', selectedFileId],
-    queryFn: () => getTeamsUserActivity(selectedFileId),
+    queryKey: ['teams_user_activity', selectedFileId, selectedEmployeeFileId],
+    queryFn: () => getTeamsUserActivity(selectedFileId, selectedEmployeeFileId),
     enabled: files.length > 0,
     staleTime: 5 * 60 * 1000,
     cacheTime: 10 * 60 * 1000,
@@ -91,8 +110,8 @@ export default function UserWiseTab({ files, selectedFileId, setSelectedFileId }
   })
 
   const { data: compareData = [], isLoading: isLoadingCompare } = useQuery({
-    queryKey: ['teams_user_activity_compare', compareFileId],
-    queryFn: () => getTeamsUserActivity(compareFileId),
+    queryKey: ['teams_user_activity_compare', compareFileId, selectedEmployeeFileId],
+    queryFn: () => getTeamsUserActivity(compareFileId, selectedEmployeeFileId),
     enabled: compareMode && compareFileId !== null,
     staleTime: 5 * 60 * 1000,
     cacheTime: 10 * 60 * 1000,
@@ -102,24 +121,109 @@ export default function UserWiseTab({ files, selectedFileId, setSelectedFileId }
     refetchInterval: false,
   })
 
-  // Get unique users for dropdown
-  const uniqueUsers = useMemo(() => {
-    const users = new Set()
+  // Base data for filter options: when function(s) selected, only show departments/users under those functions
+  const dataForFilterOptions = useMemo(() => {
+    if (selectedFunctions.length === 0) return userData
+    const set = new Set(selectedFunctions)
+    return userData.filter(u => set.has((u.function != null ? String(u.function).trim() : '') || 'Unknown'))
+  }, [userData, selectedFunctions])
+
+  const uniqueFunctions = useMemo(() => {
+    const set = new Set()
     userData.forEach(u => {
-      if (u.user) users.add(u.user)
+      const f = (u.function != null ? String(u.function).trim() : '') || 'Unknown'
+      set.add(f)
     })
     if (compareMode && compareData.length > 0) {
       compareData.forEach(u => {
-        if (u.user) users.add(u.user)
+        const f = (u.function != null ? String(u.function).trim() : '') || 'Unknown'
+        set.add(f)
       })
     }
-    return Array.from(users).sort()
+    return Array.from(set).sort()
   }, [userData, compareData, compareMode])
 
-  // Aggregate total activities (when no user selected)
+  const uniqueDepartments = useMemo(() => {
+    const set = new Set()
+    dataForFilterOptions.forEach(u => {
+      const d = (u.department != null ? String(u.department).trim() : '') || 'Unknown'
+      set.add(d)
+    })
+    if (compareMode && compareData.length > 0) {
+      const byFunction = selectedFunctions.length > 0
+        ? compareData.filter(u => selectedFunctions.includes((u.function != null ? String(u.function).trim() : '') || 'Unknown'))
+        : compareData
+      byFunction.forEach(u => {
+        const d = (u.department != null ? String(u.department).trim() : '') || 'Unknown'
+        set.add(d)
+      })
+    }
+    return Array.from(set).sort()
+  }, [dataForFilterOptions, compareData, compareMode, selectedFunctions])
+
+  // User options: restricted by selected function(s) and by selected department(s)
+  const uniqueUsers = useMemo(() => {
+    let list = dataForFilterOptions
+    if (selectedDepartments.length > 0) {
+      const deptSet = new Set(selectedDepartments)
+      list = list.filter(u => deptSet.has((u.department != null ? String(u.department).trim() : '') || 'Unknown'))
+    }
+    const users = new Set()
+    list.forEach(u => { if (u.user) users.add(u.user) })
+    if (compareMode && compareData.length > 0) {
+      let compareList = compareData
+      if (selectedFunctions.length > 0) {
+        const fnSet = new Set(selectedFunctions)
+        compareList = compareList.filter(u => fnSet.has((u.function != null ? String(u.function).trim() : '') || 'Unknown'))
+      }
+      if (selectedDepartments.length > 0) {
+        const deptSet = new Set(selectedDepartments)
+        compareList = compareList.filter(u => deptSet.has((u.department != null ? String(u.department).trim() : '') || 'Unknown'))
+      }
+      compareList.forEach(u => { if (u.user) users.add(u.user) })
+    }
+    return Array.from(users).sort()
+  }, [dataForFilterOptions, compareData, compareMode, selectedFunctions, selectedDepartments])
+
+  // Apply Function, Department, User filters to get base filtered data
+  const filteredBase = useMemo(() => {
+    let list = userData
+    if (selectedFunctions.length > 0) {
+      const set = new Set(selectedFunctions)
+      list = list.filter(u => set.has((u.function != null ? String(u.function).trim() : '') || 'Unknown'))
+    }
+    if (selectedDepartments.length > 0) {
+      const set = new Set(selectedDepartments)
+      list = list.filter(u => set.has((u.department != null ? String(u.department).trim() : '') || 'Unknown'))
+    }
+    if (selectedUsers.length > 0) {
+      const set = new Set(selectedUsers)
+      list = list.filter(u => set.has(u.user))
+    }
+    return list
+  }, [userData, selectedFunctions, selectedDepartments, selectedUsers])
+
+  const filteredCompareBase = useMemo(() => {
+    if (!compareMode || !compareData.length) return []
+    let list = compareData
+    if (selectedFunctions.length > 0) {
+      const set = new Set(selectedFunctions)
+      list = list.filter(u => set.has((u.function != null ? String(u.function).trim() : '') || 'Unknown'))
+    }
+    if (selectedDepartments.length > 0) {
+      const set = new Set(selectedDepartments)
+      list = list.filter(u => set.has((u.department != null ? String(u.department).trim() : '') || 'Unknown'))
+    }
+    if (selectedUsers.length > 0) {
+      const set = new Set(selectedUsers)
+      list = list.filter(u => set.has(u.user))
+    }
+    return list
+  }, [compareData, compareMode, selectedFunctions, selectedDepartments, selectedUsers])
+
+  // Aggregate total activities (when no specific users selected)
   const totalActivities = useMemo(() => {
-    if (selectedUser || userData.length === 0) return []
-    
+    if (selectedUsers.length > 0 || filteredBase.length === 0) return []
     const total = {
       user: 'Total Activities',
       'Team Chat': 0,
@@ -133,8 +237,7 @@ export default function UserWiseTab({ files, selectedFileId, setSelectedFileId }
       'Recurring Att': 0,
       'Post Messages': 0,
     }
-
-    userData.forEach(u => {
+    filteredBase.forEach(u => {
       total['Team Chat'] += u['Team Chat'] || 0
       total['Private Chat'] += u['Private Chat'] || 0
       total['Calls'] += u['Calls'] || 0
@@ -146,13 +249,11 @@ export default function UserWiseTab({ files, selectedFileId, setSelectedFileId }
       total['Recurring Att'] += u['Recurring Att'] || 0
       total['Post Messages'] += u['Post Messages'] || 0
     })
-
     return [total]
-  }, [userData, selectedUser])
+  }, [filteredBase, selectedUsers.length])
 
   const totalCompareActivities = useMemo(() => {
-    if (selectedUser || compareData.length === 0) return []
-    
+    if (selectedUsers.length > 0 || filteredCompareBase.length === 0) return []
     const total = {
       user: 'Total Activities',
       'Team Chat (Compare)': 0,
@@ -166,8 +267,7 @@ export default function UserWiseTab({ files, selectedFileId, setSelectedFileId }
       'Recurring Att (Compare)': 0,
       'Post Messages (Compare)': 0,
     }
-
-    compareData.forEach(u => {
+    filteredCompareBase.forEach(u => {
       total['Team Chat (Compare)'] += u['Team Chat'] || 0
       total['Private Chat (Compare)'] += u['Private Chat'] || 0
       total['Calls (Compare)'] += u['Calls'] || 0
@@ -179,60 +279,33 @@ export default function UserWiseTab({ files, selectedFileId, setSelectedFileId }
       total['Recurring Att (Compare)'] += u['Recurring Att'] || 0
       total['Post Messages (Compare)'] += u['Post Messages'] || 0
     })
-
     return [total]
-  }, [compareData, selectedUser])
+  }, [filteredCompareBase, selectedUsers.length])
 
-  // Filter data by selected user
   const filteredData = useMemo(() => {
-    if (!selectedUser) return totalActivities
-    return userData.filter(u => u.user === selectedUser)
-  }, [userData, selectedUser, totalActivities])
+    if (selectedUsers.length === 0) return totalActivities
+    return filteredBase
+  }, [filteredBase, totalActivities, selectedUsers.length])
 
   const filteredCompareData = useMemo(() => {
-    if (!selectedUser) return totalCompareActivities
-    return compareData.filter(u => u.user === selectedUser)
-  }, [compareData, selectedUser, totalCompareActivities])
+    if (selectedUsers.length === 0) return totalCompareActivities
+    return filteredCompareBase
+  }, [filteredCompareBase, totalCompareActivities, selectedUsers.length])
 
-  // Merge data for comparison
+  // Merge data for comparison (always per-user, never single "Total" row)
   const mergedData = useMemo(() => {
-    if (!compareMode || !compareFileId) return filteredData
-
-    if (!selectedUser) {
-      // Merge totals
-      const merged = [{
-        user: 'Total Activities',
-        ...totalActivities[0],
-        ...totalCompareActivities[0]
-      }]
-      return merged
-    }
-
-    // Create a map of user -> data for both files
+    if (!compareMode || !compareFileId) return []
     const file1Map = {}
     const file2Map = {}
-
-    filteredData.forEach(u => {
-      file1Map[u.user] = u
-    })
-
-    filteredCompareData.forEach(u => {
-      file2Map[u.user] = u
-    })
-
-    // Get all users from both files
+    filteredBase.forEach(u => { file1Map[u.user] = u })
+    filteredCompareBase.forEach(u => { file2Map[u.user] = u })
     const allUsers = new Set([...Object.keys(file1Map), ...Object.keys(file2Map)])
-
-    // Create merged records
     const merged = []
     allUsers.forEach(user => {
       const file1Data = file1Map[user]
       const file2Data = file2Map[user]
-
-      // Create a record with both files' data
       merged.push({
         user,
-        // File 1 data (original columns)
         'Team Chat': file1Data ? file1Data['Team Chat'] : 0,
         'Private Chat': file1Data ? file1Data['Private Chat'] : 0,
         'Calls': file1Data ? file1Data['Calls'] : 0,
@@ -243,7 +316,6 @@ export default function UserWiseTab({ files, selectedFileId, setSelectedFileId }
         'Recurring Org': file1Data ? file1Data['Recurring Org'] : 0,
         'Recurring Att': file1Data ? file1Data['Recurring Att'] : 0,
         'Post Messages': file1Data ? file1Data['Post Messages'] : 0,
-        // File 2 data (with different names for comparison)
         'Team Chat (Compare)': file2Data ? file2Data['Team Chat'] : 0,
         'Private Chat (Compare)': file2Data ? file2Data['Private Chat'] : 0,
         'Calls (Compare)': file2Data ? file2Data['Calls'] : 0,
@@ -256,54 +328,95 @@ export default function UserWiseTab({ files, selectedFileId, setSelectedFileId }
         'Post Messages (Compare)': file2Data ? file2Data['Post Messages'] : 0,
       })
     })
-
     return merged.sort((a, b) => a.user.localeCompare(b.user))
-  }, [filteredData, filteredCompareData, compareMode, compareFileId, selectedUser, totalActivities, totalCompareActivities])
+  }, [filteredBase, filteredCompareBase, compareMode, compareFileId])
 
-  const chartData = compareMode ? mergedData : filteredData
+  // Chart data: always per-user (never cumulative total)
+  const chartDataForChart = useMemo(() => {
+    if (compareMode && mergedData.length > 0) return mergedData
+    return filteredBase
+  }, [compareMode, mergedData, filteredBase])
 
-  // Transform data for activity-based chart (activities on X-axis)
-  const activityChartData = useMemo(() => {
-    if (chartData.length === 0) return []
+  // Activity keys and full labels for chart (match "Team Chat Message Count" style)
+  const ACTIVITY_CHART_LABELS = [
+    { key: 'Team Chat', label: 'Team Chat Message Count' },
+    { key: 'Private Chat', label: 'Private Chat Message Count' },
+    { key: 'Calls', label: 'Call Count' },
+    { key: 'Meetings Org', label: 'Meetings Organized Count' },
+    { key: 'Meetings Att', label: 'Meetings Attended Count' },
+    { key: 'One-time Org', label: 'One-time Meetings Organized' },
+    { key: 'One-time Att', label: 'One-time Meetings Attended' },
+    { key: 'Recurring Org', label: 'Recurring Meetings Organized' },
+    { key: 'Recurring Att', label: 'Recurring Meetings Attended' },
+    { key: 'Post Messages', label: 'Post Messages' },
+  ]
 
-    const activities = [
-      { key: 'Team Chat', label: 'Team Chat Message Count' },
-      { key: 'Private Chat', label: 'Private Chat Message Count' },
-      { key: 'Calls', label: 'Call Count' },
-      { key: 'Meetings Org', label: 'Meetings Organized Count' },
-      { key: 'Meetings Att', label: 'Meetings Attended Count' },
-      { key: 'One-time Org', label: 'One-time Meetings Organized' },
-      { key: 'One-time Att', label: 'One-time Meetings Attended' },
-      { key: 'Recurring Org', label: 'Recurring Meetings Organized' },
-      { key: 'Recurring Att', label: 'Recurring Meetings Attended' },
-      { key: 'Post Messages', label: 'Post Messages' },
-    ]
-
-    // Get file info for legend labels
+  // Build one chart data array per user: [{ activity: label, count: n, countCompare?: n }, ...]
+  const chartDataByUser = useMemo(() => {
     const file1 = files.find(f => f.id === selectedFileId)
     const file2 = files.find(f => f.id === compareFileId)
-    const file1Label = file1 ? formatMonthRange(file1.from_month, file1.to_month) || 'File 1' : 'File 1'
-    const file2Label = file2 ? formatMonthRange(file2.from_month, file2.to_month) || 'File 2' : 'File 2'
-
-    return activities.map(activity => {
-      const result = {
-        activity: activity.label,
-      }
-
-      // Sum values from all users for this activity
-      chartData.forEach(user => {
-        if (!result[file1Label]) result[file1Label] = 0
-        result[file1Label] += user[activity.key] || 0
-
-        if (compareMode && compareFileId) {
-          if (!result[file2Label]) result[file2Label] = 0
-          result[file2Label] += user[`${activity.key} (Compare)`] || 0
+    const periodLabel = file1 ? formatMonthRange(file1.from_month, file1.to_month) || 'File 1' : 'File 1'
+    const periodLabel2 = file2 ? formatMonthRange(file2.from_month, file2.to_month) || 'File 2' : 'File 2'
+    return chartDataForChart.map((row) => {
+      const dataPoints = ACTIVITY_CHART_LABELS.map(({ key, label }) => {
+        const point = { activity: label, count: row[key] || 0 }
+        if (compareMode && compareFileId && row[`${key} (Compare)`] != null) {
+          point.countCompare = row[`${key} (Compare)`] || 0
         }
+        return point
       })
-
-      return result
+      return { user: row.user, periodLabel, periodLabel2, dataPoints }
     })
-  }, [chartData, files, selectedFileId, compareFileId, compareMode])
+  }, [chartDataForChart, files, selectedFileId, compareFileId, compareMode])
+
+  // Reset to 5 charts when the data set changes (new file or filters)
+  const chartDataByUserLengthRef = useRef(0)
+  useEffect(() => {
+    if (chartDataByUser.length !== chartDataByUserLengthRef.current) {
+      chartDataByUserLengthRef.current = chartDataByUser.length
+      setChartsToShow(INITIAL_CHARTS)
+    }
+  }, [chartDataByUser.length])
+
+  // Build distinct user list with email, function, department (from current file data)
+  const userListWithEmail = useMemo(() => {
+    const seen = new Set()
+    const list = []
+    userData.forEach((row) => {
+      const email = (row.user || '').trim()
+      if (!email || seen.has(email)) return
+      seen.add(email)
+      list.push({
+        email,
+        function: (row.function != null ? String(row.function).trim() : '') || 'Unknown',
+        department: (row.department != null ? String(row.department).trim() : '') || 'Unknown',
+      })
+    })
+    list.sort((a, b) => (a.email || '').localeCompare(b.email || ''))
+    return list
+  }, [userData])
+
+  // Download user list as CSV (S.No, Email, Function, Department)
+  const downloadUserListCSV = () => {
+    if (userListWithEmail.length === 0) {
+      alert('No users to export. Select a Teams file and ensure data is loaded.')
+      return
+    }
+    const headers = ['S.No', 'Email', 'Function', 'Department']
+    const rows = userListWithEmail.map((u, i) => [i + 1, u.email, u.function, u.department])
+    const escape = (v) => {
+      const s = String(v ?? '')
+      if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`
+      return s
+    }
+    const csv = [headers.map(escape).join(','), ...rows.map((r) => r.map(escape).join(','))].join('\r\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const link = document.createElement('a')
+    link.href = URL.createObjectURL(blob)
+    link.download = `Teams_Users_${userListWithEmail.length}_${new Date().toISOString().split('T')[0]}.csv`
+    link.click()
+    URL.revokeObjectURL(link.href)
+  }
 
   // Download chart as PNG
   const downloadChartAsPNG = async () => {
@@ -329,7 +442,7 @@ export default function UserWiseTab({ files, selectedFileId, setSelectedFileId }
       
       const imgData = canvas.toDataURL('image/png', 1.0)
       const link = document.createElement('a')
-      const fileName = `User_Activity_Chart_${selectedUser || 'All'}_${new Date().toISOString().split('T')[0]}.png`
+      const fileName = `User_Activity_Chart_${selectedUsers.length ? selectedUsers.join('_').slice(0, 30) : 'All'}_${new Date().toISOString().split('T')[0]}.png`
       link.download = fileName.replace(/[^a-z0-9._-]/gi, '_')
       link.href = imgData
       document.body.appendChild(link)
@@ -366,10 +479,10 @@ export default function UserWiseTab({ files, selectedFileId, setSelectedFileId }
       }
       
       // Add chart
-      if (chartRef.current && activityChartData.length > 0) {
+      if (chartRef.current && chartDataForChart.length > 0) {
         elements.push({
           element: chartRef.current,
-          title: selectedUser ? `Activity for ${selectedUser}` : 'All Activities'
+          title: selectedUsers.length ? `Activity for ${selectedUsers.length} user(s)` : 'All Activities'
         })
       }
       
@@ -420,7 +533,7 @@ export default function UserWiseTab({ files, selectedFileId, setSelectedFileId }
         }
       }
       
-      const fileName = `User_Activity_Report_${selectedUser || 'All'}_${new Date().toISOString().split('T')[0]}.pdf`
+      const fileName = `User_Activity_Report_${selectedUsers.length ? selectedUsers.length + 'users' : 'All'}_${new Date().toISOString().split('T')[0]}.pdf`
       pdf.save(fileName.replace(/[^a-z0-9._-]/gi, '_'))
     } catch (error) {
       console.error('Error exporting PDF:', error)
@@ -475,7 +588,7 @@ export default function UserWiseTab({ files, selectedFileId, setSelectedFileId }
           </label>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-white rounded-lg p-3 border-2 border-blue-300 shadow-sm">
             <label htmlFor="fileSelect" className="block text-sm font-semibold text-gray-800 mb-2 flex items-center gap-2">
               <span className="lnr lnr-file-empty text-blue-600"></span>
@@ -487,7 +600,7 @@ export default function UserWiseTab({ files, selectedFileId, setSelectedFileId }
               onChange={(e) => setSelectedFileId(e.target.value ? parseInt(e.target.value) : null)}
               className="w-full px-4 py-2.5 border-2 border-gray-300 rounded-md bg-white text-gray-900 font-medium focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all shadow-sm hover:border-blue-400"
             >
-              <option value="">All Files</option>
+              {files.length === 0 && <option value="">No files uploaded</option>}
               {files.map(f => (
                 <option key={f.id} value={f.id}>
                   {formatMonthRange(f.from_month, f.to_month) || f.filename}
@@ -495,6 +608,28 @@ export default function UserWiseTab({ files, selectedFileId, setSelectedFileId }
               ))}
             </select>
           </div>
+
+          {employeeFiles.length > 0 && (
+            <div className="bg-white rounded-lg p-3 border-2 border-blue-300 shadow-sm">
+              <label htmlFor="employeeFileSelect" className="block text-sm font-semibold text-gray-800 mb-2 flex items-center gap-2">
+                <span className="lnr lnr-users text-blue-600"></span>
+                Employee File (for Function / Department)
+              </label>
+              <select
+                id="employeeFileSelect"
+                value={selectedEmployeeFileId || ''}
+                onChange={(e) => setSelectedEmployeeFileId(e.target.value ? parseInt(e.target.value) : null)}
+                className="w-full px-4 py-2.5 border-2 border-gray-300 rounded-md bg-white text-gray-900 font-medium focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all shadow-sm hover:border-blue-400"
+              >
+                <option value="">None</option>
+                {employeeFiles.map(f => (
+                  <option key={f.id} value={f.id}>
+                    {f.filename || `File ${f.id}`}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {compareMode && (
             <div className="bg-white rounded-lg p-3 border-2 border-blue-400 shadow-sm">
@@ -519,83 +654,195 @@ export default function UserWiseTab({ files, selectedFileId, setSelectedFileId }
           )}
 
           <div className="bg-white rounded-lg p-3 border-2 border-blue-300 shadow-sm">
-            <label htmlFor="userSelect" className="block text-sm font-semibold text-gray-800 mb-2 flex items-center gap-2">
-              <span className="lnr lnr-user text-blue-600"></span>
-              Filter by User Email
-            </label>
-            <select
-              id="userSelect"
-              value={selectedUser}
-              onChange={(e) => setSelectedUser(e.target.value)}
-              className="w-full px-4 py-2.5 border-2 border-gray-300 rounded-md bg-white text-gray-900 font-medium focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all shadow-sm hover:border-blue-400"
-            >
-              <option value="">All Users ({uniqueUsers.length})</option>
-              {uniqueUsers.map(user => (
-                <option key={user} value={user}>{user}</option>
-              ))}
-            </select>
+            <MultiSelectSearchable
+              id="filter-function"
+              label="Function"
+              value={selectedFunctions}
+              onChange={setSelectedFunctions}
+              options={uniqueFunctions.map(f => ({ value: f, label: f }))}
+              placeholder={`All Functions (${uniqueFunctions.length})`}
+              icon="lnr-briefcase"
+            />
+          </div>
+          <div className="bg-white rounded-lg p-3 border-2 border-blue-300 shadow-sm">
+            <MultiSelectSearchable
+              id="filter-department"
+              label="Department"
+              value={selectedDepartments}
+              onChange={setSelectedDepartments}
+              options={uniqueDepartments.map(d => ({ value: d, label: d }))}
+              placeholder={`All Departments (${uniqueDepartments.length})`}
+              icon="lnr-apartment"
+            />
+          </div>
+          <div className="bg-white rounded-lg p-3 border-2 border-blue-300 shadow-sm">
+            <MultiSelectSearchable
+              id="filter-user"
+              label="User"
+              value={selectedUsers}
+              onChange={setSelectedUsers}
+              options={uniqueUsers.map(u => ({ value: u, label: u }))}
+              placeholder={`All users in file (${uniqueUsers.length})`}
+              icon="lnr-user"
+            />
+            <p className="text-xs text-gray-500 mt-1.5">Distinct users in the selected Teams activity file. May differ from assigned license (see cards above).</p>
+            {userListWithEmail.length > 0 && (
+              <button
+                type="button"
+                onClick={downloadUserListCSV}
+                className="mt-2 w-full px-3 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                Download user list ({userListWithEmail.length} users, CSV)
+              </button>
+            )}
           </div>
         </div>
       </div>
 
       {/* Summary Stats */}
-      {filteredData.length > 0 && (
-        <div ref={statsRef} className="grid grid-cols-2 md:grid-cols-5 gap-4">
-          <div className="card p-4 border-l-4 border-blue-500">
-            <p className="text-sm text-gray-600">Team Chats</p>
-            <p className="text-2xl font-bold text-gray-900">{filteredData.reduce((sum, d) => sum + (d['Team Chat'] || 0), 0).toLocaleString()}</p>
-            <p className="text-xs text-gray-500 mt-1">{selectedUser ? '1 user(s)' : `${uniqueUsers.length} user(s)`}</p>
+      {chartDataForChart.length > 0 && (() => {
+        const file1 = files.find(f => f.id === selectedFileId)
+        const file2 = files.find(f => f.id === compareFileId)
+        const file1Label = file1 ? formatMonthRange(file1.from_month, file1.to_month) || 'File 1' : 'File 1'
+        const file2Label = file2 ? formatMonthRange(file2.from_month, file2.to_month) || 'File 2' : 'File 2'
+        
+        const calculateSum = (key) => {
+          return chartDataForChart.reduce((sum, d) => sum + (d[key] || 0), 0)
+        }
+        
+        const calculateCompareSum = (key) => {
+          if (!compareMode || !compareFileId) return null
+          return chartDataForChart.reduce((sum, d) => sum + (d[`${key} (Compare)`] || 0), 0)
+        }
+        
+        return (
+          <div ref={statsRef} className="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <div className="card p-4 bg-gradient-to-br from-slate-600 to-slate-800 border-2 border-slate-700 shadow-lg">
+              <p className="text-sm font-semibold text-white">Team Chats</p>
+              <p className="text-2xl font-bold text-white">{calculateSum('Team Chat').toLocaleString()}</p>
+              {compareMode && compareFileId && (
+                <p className="text-lg font-semibold text-slate-200 mt-1">{calculateCompareSum('Team Chat').toLocaleString()}</p>
+              )}
+              <p className="text-xs text-slate-300 mt-1">{selectedUsers.length ? `${selectedUsers.length} user(s)` : `${filteredBase.length} user(s)`}</p>
+              <p className="text-xs text-slate-400 mt-0.5 opacity-90">Messages sent in team channels</p>
+              {compareMode && compareFileId && (
+                <p className="text-xs text-slate-400">{file1Label} / {file2Label}</p>
+              )}
+            </div>
+            <div className="card p-4 bg-gradient-to-br from-emerald-500 to-emerald-700 border-2 border-emerald-600 shadow-lg">
+              <p className="text-sm font-semibold text-white">Private Chats</p>
+              <p className="text-2xl font-bold text-white">{calculateSum('Private Chat').toLocaleString()}</p>
+              {compareMode && compareFileId && (
+                <p className="text-lg font-semibold text-emerald-100 mt-1">{calculateCompareSum('Private Chat').toLocaleString()}</p>
+              )}
+              <p className="text-xs text-emerald-100 mt-1">{selectedUsers.length ? `${selectedUsers.length} user(s)` : `${filteredBase.length} user(s)`}</p>
+              <p className="text-xs text-emerald-200 mt-0.5 opacity-90">1:1 or group chats (not in channels)</p>
+              {compareMode && compareFileId && (
+                <p className="text-xs text-emerald-200">{file1Label} / {file2Label}</p>
+              )}
+            </div>
+            <div className="card p-4 bg-gradient-to-br from-amber-500 to-amber-700 border-2 border-amber-600 shadow-lg">
+              <p className="text-sm font-semibold text-white">Calls</p>
+              <p className="text-2xl font-bold text-white">{calculateSum('Calls').toLocaleString()}</p>
+              {compareMode && compareFileId && (
+                <p className="text-lg font-semibold text-amber-100 mt-1">{calculateCompareSum('Calls').toLocaleString()}</p>
+              )}
+              <p className="text-xs text-amber-100 mt-1">{selectedUsers.length ? `${selectedUsers.length} user(s)` : `${filteredBase.length} user(s)`}</p>
+              <p className="text-xs text-amber-200 mt-0.5 opacity-90">Voice or video calls</p>
+              {compareMode && compareFileId && (
+                <p className="text-xs text-amber-200">{file1Label} / {file2Label}</p>
+              )}
+            </div>
+            <div className="card p-4 bg-gradient-to-br from-violet-500 to-violet-700 border-2 border-violet-600 shadow-lg">
+              <p className="text-sm font-semibold text-white">Meetings Organized</p>
+              <p className="text-2xl font-bold text-white">{calculateSum('Meetings Org').toLocaleString()}</p>
+              {compareMode && compareFileId && (
+                <p className="text-lg font-semibold text-violet-100 mt-1">{calculateCompareSum('Meetings Org').toLocaleString()}</p>
+              )}
+              <p className="text-xs text-violet-100 mt-1">{selectedUsers.length ? `${selectedUsers.length} user(s)` : `${filteredBase.length} user(s)`}</p>
+              <p className="text-xs text-violet-200 mt-0.5 opacity-90">Meetings the user scheduled</p>
+              {compareMode && compareFileId && (
+                <p className="text-xs text-violet-200">{file1Label} / {file2Label}</p>
+              )}
+            </div>
+            <div className="card p-4 bg-gradient-to-br from-rose-500 to-rose-700 border-2 border-rose-600 shadow-lg">
+              <p className="text-sm font-semibold text-white">Meetings Attended</p>
+              <p className="text-2xl font-bold text-white">{calculateSum('Meetings Att').toLocaleString()}</p>
+              {compareMode && compareFileId && (
+                <p className="text-lg font-semibold text-rose-100 mt-1">{calculateCompareSum('Meetings Att').toLocaleString()}</p>
+              )}
+              <p className="text-xs text-rose-100 mt-1">{selectedUsers.length ? `${selectedUsers.length} user(s)` : `${filteredBase.length} user(s)`}</p>
+              <p className="text-xs text-rose-200 mt-0.5 opacity-90">Meetings the user joined</p>
+              {compareMode && compareFileId && (
+                <p className="text-xs text-rose-200">{file1Label} / {file2Label}</p>
+              )}
+            </div>
+            <div className="card p-4 bg-gradient-to-br from-cyan-500 to-cyan-700 border-2 border-cyan-600 shadow-lg">
+              <p className="text-sm font-semibold text-white">One-time Meetings Organized</p>
+              <p className="text-2xl font-bold text-white">{calculateSum('One-time Org').toLocaleString()}</p>
+              {compareMode && compareFileId && (
+                <p className="text-lg font-semibold text-cyan-100 mt-1">{calculateCompareSum('One-time Org').toLocaleString()}</p>
+              )}
+              <p className="text-xs text-cyan-100 mt-1">{selectedUsers.length ? `${selectedUsers.length} user(s)` : `${filteredBase.length} user(s)`}</p>
+              <p className="text-xs text-cyan-200 mt-0.5 opacity-90">Single-occurrence meetings scheduled</p>
+              {compareMode && compareFileId && (
+                <p className="text-xs text-cyan-200">{file1Label} / {file2Label}</p>
+              )}
+            </div>
+            <div className="card p-4 bg-gradient-to-br from-sky-500 to-sky-700 border-2 border-sky-600 shadow-lg">
+              <p className="text-sm font-semibold text-white">One-time Meetings Attended</p>
+              <p className="text-2xl font-bold text-white">{calculateSum('One-time Att').toLocaleString()}</p>
+              {compareMode && compareFileId && (
+                <p className="text-lg font-semibold text-sky-100 mt-1">{calculateCompareSum('One-time Att').toLocaleString()}</p>
+              )}
+              <p className="text-xs text-sky-100 mt-1">{selectedUsers.length ? `${selectedUsers.length} user(s)` : `${filteredBase.length} user(s)`}</p>
+              <p className="text-xs text-sky-200 mt-0.5 opacity-90">Single-occurrence meetings joined</p>
+              {compareMode && compareFileId && (
+                <p className="text-xs text-sky-200">{file1Label} / {file2Label}</p>
+              )}
+            </div>
+            <div className="card p-4 bg-gradient-to-br from-indigo-500 to-indigo-700 border-2 border-indigo-600 shadow-lg">
+              <p className="text-sm font-semibold text-white">Recurring Meetings Organized</p>
+              <p className="text-2xl font-bold text-white">{calculateSum('Recurring Org').toLocaleString()}</p>
+              {compareMode && compareFileId && (
+                <p className="text-lg font-semibold text-indigo-100 mt-1">{calculateCompareSum('Recurring Org').toLocaleString()}</p>
+              )}
+              <p className="text-xs text-indigo-100 mt-1">{selectedUsers.length ? `${selectedUsers.length} user(s)` : `${filteredBase.length} user(s)`}</p>
+              <p className="text-xs text-indigo-200 mt-0.5 opacity-90">Series meetings the user scheduled</p>
+              {compareMode && compareFileId && (
+                <p className="text-xs text-indigo-200">{file1Label} / {file2Label}</p>
+              )}
+            </div>
+            <div className="card p-4 bg-gradient-to-br from-fuchsia-500 to-fuchsia-700 border-2 border-fuchsia-600 shadow-lg">
+              <p className="text-sm font-semibold text-white">Recurring Meetings Attended</p>
+              <p className="text-2xl font-bold text-white">{calculateSum('Recurring Att').toLocaleString()}</p>
+              {compareMode && compareFileId && (
+                <p className="text-lg font-semibold text-fuchsia-100 mt-1">{calculateCompareSum('Recurring Att').toLocaleString()}</p>
+              )}
+              <p className="text-xs text-fuchsia-100 mt-1">{selectedUsers.length ? `${selectedUsers.length} user(s)` : `${filteredBase.length} user(s)`}</p>
+              <p className="text-xs text-fuchsia-200 mt-0.5 opacity-90">Series meetings the user joined</p>
+              {compareMode && compareFileId && (
+                <p className="text-xs text-fuchsia-200">{file1Label} / {file2Label}</p>
+              )}
+            </div>
+            <div className="card p-4 bg-gradient-to-br from-red-500 to-red-700 border-2 border-red-600 shadow-lg">
+              <p className="text-sm font-semibold text-white">Post Messages</p>
+              <p className="text-2xl font-bold text-white">{calculateSum('Post Messages').toLocaleString()}</p>
+              {compareMode && compareFileId && (
+                <p className="text-lg font-semibold text-red-100 mt-1">{calculateCompareSum('Post Messages').toLocaleString()}</p>
+              )}
+              <p className="text-xs text-red-100 mt-1">{selectedUsers.length ? `${selectedUsers.length} user(s)` : `${filteredBase.length} user(s)`}</p>
+              <p className="text-xs text-red-200 mt-0.5 opacity-90">Messages posted in channel conversations</p>
+              {compareMode && compareFileId && (
+                <p className="text-xs text-red-200">{file1Label} / {file2Label}</p>
+              )}
+            </div>
           </div>
-          <div className="card p-4 border-l-4 border-green-500">
-            <p className="text-sm text-gray-600">Private Chats</p>
-            <p className="text-2xl font-bold text-gray-900">{filteredData.reduce((sum, d) => sum + (d['Private Chat'] || 0), 0).toLocaleString()}</p>
-            <p className="text-xs text-gray-500 mt-1">{selectedUser ? '1 user(s)' : `${uniqueUsers.length} user(s)`}</p>
-          </div>
-          <div className="card p-4 border-l-4 border-orange-500">
-            <p className="text-sm text-gray-600">Calls</p>
-            <p className="text-2xl font-bold text-gray-900">{filteredData.reduce((sum, d) => sum + (d['Calls'] || 0), 0).toLocaleString()}</p>
-            <p className="text-xs text-gray-500 mt-1">{selectedUser ? '1 user(s)' : `${uniqueUsers.length} user(s)`}</p>
-          </div>
-          <div className="card p-4 border-l-4 border-purple-500">
-            <p className="text-sm text-gray-600">Meetings Organized</p>
-            <p className="text-2xl font-bold text-gray-900">{filteredData.reduce((sum, d) => sum + (d['Meetings Org'] || 0), 0).toLocaleString()}</p>
-            <p className="text-xs text-gray-500 mt-1">{selectedUser ? '1 user(s)' : `${uniqueUsers.length} user(s)`}</p>
-          </div>
-          <div className="card p-4 border-l-4 border-pink-500">
-            <p className="text-sm text-gray-600">Meetings Attended</p>
-            <p className="text-2xl font-bold text-gray-900">{filteredData.reduce((sum, d) => sum + (d['Meetings Att'] || 0), 0).toLocaleString()}</p>
-            <p className="text-xs text-gray-500 mt-1">{selectedUser ? '1 user(s)' : `${uniqueUsers.length} user(s)`}</p>
-          </div>
-          <div className="card p-4 border-l-4 border-teal-500">
-            <p className="text-sm text-gray-600">One-time Meetings Organized</p>
-            <p className="text-2xl font-bold text-gray-900">{filteredData.reduce((sum, d) => sum + (d['One-time Org'] || 0), 0).toLocaleString()}</p>
-            <p className="text-xs text-gray-500 mt-1">{selectedUser ? '1 user(s)' : `${uniqueUsers.length} user(s)`}</p>
-          </div>
-          <div className="card p-4 border-l-4 border-cyan-500">
-            <p className="text-sm text-gray-600">One-time Meetings Attended</p>
-            <p className="text-2xl font-bold text-gray-900">{filteredData.reduce((sum, d) => sum + (d['One-time Att'] || 0), 0).toLocaleString()}</p>
-            <p className="text-xs text-gray-500 mt-1">{selectedUser ? '1 user(s)' : `${uniqueUsers.length} user(s)`}</p>
-          </div>
-          <div className="card p-4 border-l-4 border-indigo-500">
-            <p className="text-sm text-gray-600">Recurring Meetings Organized</p>
-            <p className="text-2xl font-bold text-gray-900">{filteredData.reduce((sum, d) => sum + (d['Recurring Org'] || 0), 0).toLocaleString()}</p>
-            <p className="text-xs text-gray-500 mt-1">{selectedUser ? '1 user(s)' : `${uniqueUsers.length} user(s)`}</p>
-          </div>
-          <div className="card p-4 border-l-4 border-violet-500">
-            <p className="text-sm text-gray-600">Recurring Meetings Attended</p>
-            <p className="text-2xl font-bold text-gray-900">{filteredData.reduce((sum, d) => sum + (d['Recurring Att'] || 0), 0).toLocaleString()}</p>
-            <p className="text-xs text-gray-500 mt-1">{selectedUser ? '1 user(s)' : `${uniqueUsers.length} user(s)`}</p>
-          </div>
-          <div className="card p-4 border-l-4 border-red-500">
-            <p className="text-sm text-gray-600">Post Messages</p>
-            <p className="text-2xl font-bold text-gray-900">{filteredData.reduce((sum, d) => sum + (d['Post Messages'] || 0), 0).toLocaleString()}</p>
-            <p className="text-xs text-gray-500 mt-1">{selectedUser ? '1 user(s)' : `${uniqueUsers.length} user(s)`}</p>
-          </div>
-        </div>
-      )}
+        )
+      })()}
 
       {/* Export Actions - Show when chart is available */}
-      {activityChartData.length > 0 && (
+      {chartDataForChart.length > 0 && (
         <div className="card p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200">
           <div className="flex items-center justify-between">
             <div>
@@ -636,82 +883,85 @@ export default function UserWiseTab({ files, selectedFileId, setSelectedFileId }
         </div>
       )}
 
-      {/* Chart */}
-      {activityChartData.length > 0 && (
-        <div ref={chartRef} id="user-activity-chart" className="card p-6">
-          <h3 className="text-lg font-semibold text-gray-800 mb-4">
-            {selectedUser ? `Activity for ${selectedUser}` : 'All Activities'}
-          </h3>
-          <div style={{ width: '100%', height: 500 }}>
-            <ResponsiveContainer>
-              <BarChart data={activityChartData} margin={{ top: 30, right: 30, left: 60, bottom: 100 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
-                <XAxis 
-                  dataKey="activity" 
-                  angle={-45} 
-                  textAnchor="end" 
-                  height={120}
-                  tick={{ fontSize: 10, fill: '#6b7280' }}
-                  axisLine={{ stroke: '#d1d5db' }}
-                  interval={0}
-                />
-                <YAxis 
-                  label={{ value: 'Count', angle: -90, position: 'insideLeft', style: { fill: '#6b7280' } }}
-                  tick={{ fontSize: 11, fill: '#6b7280' }} 
-                  axisLine={{ stroke: '#d1d5db' }} 
-                />
-                <Tooltip 
-                  contentStyle={{ 
-                    backgroundColor: 'white', 
-                    border: '1px solid #e5e7eb', 
-                    borderRadius: '8px', 
-                    boxShadow: '0 4px 6px rgba(0,0,0,0.1)' 
-                  }} 
-                />
-                <Legend 
-                  wrapperStyle={{ paddingTop: '10px' }}
-                  iconType="square"
-                />
-                
-                {/* Determine the file labels dynamically */}
-                {(() => {
-                  const allKeys = Object.keys(activityChartData[0] || {}).filter(k => k !== 'activity')
-                  const file1Key = allKeys[0]
-                  const file2Key = allKeys[1]
-                  
-                  return (
-                    <>
-                      {file1Key && (
-                        <Bar 
-                          key={file1Key}
-                          dataKey={file1Key} 
-                          name={file1Key}
-                          fill="#f97316" 
-                          radius={[8, 8, 0, 0]}
-                        >
-                          <LabelList dataKey={file1Key} position="top" style={{ fill: '#374151', fontSize: 11, fontWeight: 600 }} />
-                        </Bar>
-                      )}
-                      
-                      {compareMode && compareFileId && file2Key && (
-                        <Bar 
-                          key={file2Key}
-                          dataKey={file2Key} 
-                          name={file2Key}
-                          fill="#3b82f6" 
-                          radius={[8, 8, 0, 0]}
-                        >
-                          <LabelList dataKey={file2Key} position="top" style={{ fill: '#374151', fontSize: 11, fontWeight: 600 }} />
-                        </Bar>
-                      )}
-                    </>
-                  )
-                })()}
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+      {/* Charts - one vertical bar chart per user (activities on X-axis, count on Y-axis); show 5 initially, then Load more / Load all */}
+      {chartDataByUser.length > 0 && (() => {
+        const visibleCharts = chartDataByUser.slice(0, chartsToShow)
+        const hasMore = chartDataByUser.length > chartsToShow
+        const total = chartDataByUser.length
+        return (
+        <div ref={chartRef} id="user-activity-charts" className="space-y-8">
+          <p className="text-sm text-gray-600">
+            Showing {visibleCharts.length} of {total} user chart{total !== 1 ? 's' : ''}.
+          </p>
+          {visibleCharts.map(({ user, periodLabel, periodLabel2, dataPoints }) => (
+            <div key={user} className="card p-6">
+              <h3 className="text-lg font-semibold text-gray-800 mb-4">{user}</h3>
+              <div style={{ width: '100%', height: 420 }}>
+                <ResponsiveContainer>
+                  <BarChart data={dataPoints} margin={{ top: 20, right: 30, left: 20, bottom: 100 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+                    <XAxis
+                      dataKey="activity"
+                      angle={-45}
+                      textAnchor="end"
+                      height={100}
+                      tick={{ fontSize: 10, fill: '#6b7280' }}
+                      axisLine={{ stroke: '#d1d5db' }}
+                      interval={0}
+                    />
+                    <YAxis
+                      label={{ value: 'Count', angle: -90, position: 'insideLeft', style: { fill: '#6b7280', fontSize: 12 } }}
+                      tick={{ fontSize: 11, fill: '#6b7280' }}
+                      axisLine={{ stroke: '#d1d5db' }}
+                      allowDecimals={false}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: 'white',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '8px',
+                        boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+                      }}
+                    />
+                    <Legend wrapperStyle={{ paddingTop: '10px' }} iconType="square" />
+                    <Bar dataKey="count" name={periodLabel} fill="#f97316" radius={[4, 4, 0, 0]}>
+                      <LabelList dataKey="count" position="top" style={{ fill: '#374151', fontSize: 11, fontWeight: 600 }} />
+                    </Bar>
+                    {compareMode && compareFileId && (
+                      <Bar dataKey="countCompare" name={periodLabel2} fill="#3b82f6" radius={[4, 4, 0, 0]}>
+                        <LabelList dataKey="countCompare" position="top" style={{ fill: '#374151', fontSize: 11, fontWeight: 600 }} />
+                      </Bar>
+                    )}
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          ))}
+          {hasMore && (() => {
+            const remaining = total - chartsToShow
+            const nextBatch = Math.min(LOAD_MORE_STEP, remaining)
+            return (
+            <div className="flex flex-wrap items-center gap-3 pt-4 border-t border-gray-200">
+              <button
+                type="button"
+                onClick={() => setChartsToShow(prev => Math.min(prev + LOAD_MORE_STEP, total))}
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors"
+              >
+                Load more ({nextBatch})
+              </button>
+              <button
+                type="button"
+                onClick={() => setChartsToShow(total)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300 transition-colors"
+              >
+                Load all ({remaining})
+              </button>
+            </div>
+            )
+          })()}
         </div>
-      )}
+        )
+      })()}
     </div>
   )
 }

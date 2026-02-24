@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { listTeamsAppFiles, getTeamsAppActivity } from '../../lib/api'
 import DataTable from '../../components/DataTable'
@@ -84,17 +84,24 @@ export default function TeamsAppActivityPage() {
     queryFn: listTeamsAppFiles,
     staleTime: 5 * 60 * 1000,
     cacheTime: 10 * 60 * 1000,
-    onSuccess: (data) => {
-      if (data.length > 0 && selectedFileId === null) {
-        setSelectedFileId(data[0].id)
-      }
-    }
   })
+
+  // Set default to latest period when files load (useEffect so it runs after state; onSuccess is not reliable in React Query v5)
+  useEffect(() => {
+    if (files.length > 0 && selectedFileId === null) {
+      const sorted = [...files].sort((a, b) => {
+        const monthA = a.to_month || a.from_month || ''
+        const monthB = b.to_month || b.from_month || ''
+        return monthB.localeCompare(monthA)
+      })
+      setSelectedFileId(sorted[0].id)
+    }
+  }, [files, selectedFileId])
 
   const { data: appData = [], isLoading: isLoadingData } = useQuery({
     queryKey: ['teams_app_activity', selectedFileId],
     queryFn: () => getTeamsAppActivity(selectedFileId),
-    enabled: files.length > 0,
+    enabled: files.length > 0 && selectedFileId != null,
     staleTime: 5 * 60 * 1000,
     cacheTime: 10 * 60 * 1000,
   })
@@ -181,8 +188,8 @@ export default function TeamsAppActivityPage() {
     const file1 = files.find(f => f.id === selectedFileId)
     const file2 = files.find(f => f.id === compareFileId)
     return {
-      file1Label: selectedFileId === null ? 'All Files' : (file1 ? formatMonthRange(file1.from_month, file1.to_month) || 'File 1' : 'File 1'),
-      file2Label: compareFileId === null ? 'All Files' : (file2 ? formatMonthRange(file2.from_month, file2.to_month) || 'File 2' : 'File 2')
+      file1Label: selectedFileId == null ? 'Select file' : (file1 ? formatMonthRange(file1.from_month, file1.to_month) || 'File 1' : 'File 1'),
+      file2Label: compareFileId == null ? 'Select file' : (file2 ? formatMonthRange(file2.from_month, file2.to_month) || 'File 2' : 'File 2')
     }
   }, [files, selectedFileId, compareFileId])
 
@@ -360,7 +367,7 @@ export default function TeamsAppActivityPage() {
               onChange={(e) => setSelectedFileId(e.target.value ? parseInt(e.target.value) : null)}
               className="w-full px-4 py-2.5 border-2 border-gray-300 rounded-md bg-white text-gray-900 font-medium focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all shadow-sm hover:border-blue-400"
             >
-              <option value="">All Files</option>
+              {files.length === 0 && <option value="">No files uploaded</option>}
               {files.map(f => (
                 <option key={f.id} value={f.id}>
                   {formatMonthRange(f.from_month, f.to_month) || f.filename}

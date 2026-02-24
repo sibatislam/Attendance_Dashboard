@@ -1,36 +1,175 @@
-import { useState } from 'react'
+import { useState, useMemo, Fragment } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getUsers, createUser, updateUser, deleteUser, deleteUsers, downloadUserBulkTemplate, bulkUploadUsers, getRoles, createRole, updateRole, deleteRole } from '../lib/api'
+import { getUsers, createUser, updateUser, deleteUser, deleteUsers, downloadUserBulkTemplate, bulkUploadUsers, syncUsersRolesFromHierarchy, getScopeFromHierarchy, getRoles, createRole, updateRole, deleteRole, getEmployeeHierarchy, getScopeOptions, getEmployeeRowByEmail } from '../lib/api'
 import { useNavigate } from 'react-router-dom'
+import MultiSelectSearchable from '../components/MultiSelectSearchable'
+import TeamsUserListPage from './teams/TeamsUserListPage'
+
+const DATA_SCOPE_LEVELS = [
+  { value: '', label: 'Off (no data scope)' },
+  { value: 'N', label: 'N — All functions & departments (e.g. MD)' },
+  { value: 'N-1', label: 'N-1 — Own function & all departments under it' },
+  { value: 'N-2', label: 'N-2 — Own department only' },
+  { value: 'N-3', label: 'N-3 — Own department only' },
+  { value: 'N-4', label: 'N-4 — Own department only' },
+]
+// Check if a string is an N-level (N, N-1, N-2, ...)
+const isNLevel = (s) => s === 'N' || /^N-\d+$/.test(s)
+
+// Parse API datetime as UTC so toLocaleString() shows correct local time (backend sends UTC).
+function parseUtcDate(isoString) {
+  if (!isoString) return null
+  const s = typeof isoString === 'string' ? isoString.trim() : ''
+  if (!s) return null
+  if (!/Z|[+-]\d{2}:?\d{2}$/.test(s)) return new Date(s + 'Z')
+  return new Date(s)
+}
 
 const MODULES = [
   { id: 'attendance_dashboard', name: 'Attendance Monitoring Dashboard', description: 'Access to attendance analytics and reports' },
   { id: 'teams_dashboard', name: 'MS Teams User Activity Dashboard', description: 'Access to Teams activity monitoring' }
 ]
 
+// Attendance: menus, tabs, and views (function/department/company/location) – every menu, tab, and view selectable
 const ATTENDANCE_PERMISSIONS = [
-  { id: 'dashboard', name: 'Dashboard', description: 'View dashboard with all charts' },
-  { id: 'on_time', name: 'On Time %', description: 'View on-time percentage reports' },
-  { id: 'work_hour', name: 'Work Hour Completion', description: 'View work hour completion reports' },
-  { id: 'work_hour_lost', name: 'Work Hour Lost', description: 'View work hour lost reports' },
-  { id: 'leave_analysis', name: 'Leave Analysis', description: 'View leave analysis reports' },
-  { id: 'upload', name: 'Upload Files', description: 'Upload attendance files' },
-  { id: 'batches', name: 'Manage Batches', description: 'View and delete uploaded batches' },
-  { id: 'export', name: 'Export Reports', description: 'Export reports to PDF' }
+  { id: 'dashboard', name: 'Dashboard', description: 'View dashboard with all charts', group: 'menu' },
+  { id: 'attendance_recognition', name: 'Attendance Recognition', description: 'Attendance recognition page', group: 'menu' },
+  { id: 'weekly_dashboard', name: 'Weekly Analytics', description: 'Weekly analytics with charts', group: 'menu' },
+  { id: 'user_wise', name: 'User Analytics', description: 'User-wise reports', group: 'menu' },
+  // User Wise sub-menus (independent from standalone menu items)
+  { id: 'user_wise_on_time', name: 'User Wise - On Time %', description: 'On Time % tab inside User Wise', group: 'tab' },
+  { id: 'user_wise_work_hour', name: 'User Wise - Work Hour Completion', description: 'Work Hour Completion tab inside User Wise', group: 'tab' },
+  { id: 'user_wise_work_hour_lost', name: 'User Wise - Work Hour Lost', description: 'Work Hour Lost tab inside User Wise', group: 'tab' },
+  { id: 'user_wise_leave_analysis', name: 'User Wise - Leave Analysis', description: 'Leave Analysis tab inside User Wise', group: 'tab' },
+  { id: 'user_wise_od_analysis', name: 'User Wise - OD Analysis', description: 'OD Analysis tab inside User Wise', group: 'tab' },
+  { id: 'user_wise_work_hour_lost_cost', name: 'User Wise - Lost Hours Cost', description: 'Lost Hours Cost tab inside User Wise', group: 'tab' },
+  { id: 'on_time', name: 'On Time %', description: 'View on-time percentage reports (standalone menu)', group: 'menu' },
+  { id: 'work_hour', name: 'Work Hour Completion', description: 'View work hour completion reports', group: 'menu' },
+  { id: 'work_hour_lost', name: 'Work Hour Lost', description: 'View work hour lost reports', group: 'menu' },
+  { id: 'cost_settings', name: 'Cost Settings', description: 'Set average CTC per hour for cost calculations', group: 'menu' },
+  { id: 'work_hour_lost_cost', name: 'Lost Hours Cost Analysis', description: 'View cost of lost work hours by department and function', group: 'menu' },
+  { id: 'leave_analysis', name: 'Leave Analysis', description: 'View leave analysis reports', group: 'menu' },
+  { id: 'od_analysis', name: 'OD Analysis', description: 'OD analysis reports', group: 'menu' },
+  { id: 'weekly_analysis', name: 'Weekly Analysis', description: 'Weekly analysis reports', group: 'menu' },
+  { id: 'upload', name: 'Upload Files', description: 'Upload attendance files', group: 'menu' },
+  { id: 'batches', name: 'Manage Batches', description: 'View and delete uploaded batches', group: 'menu' },
+  { id: 'export', name: 'Export Reports', description: 'Export reports to PDF', group: 'menu' },
+  // Dashboard tabs
+  { id: 'dashboard_tab_function', name: 'Dashboard - Function tab', description: 'Access Function tab in Dashboard', group: 'tab' },
+  { id: 'dashboard_tab_company', name: 'Dashboard - Company tab', description: 'Access Company tab in Dashboard', group: 'tab' },
+  { id: 'dashboard_tab_location', name: 'Dashboard - Location tab', description: 'Access Location tab in Dashboard', group: 'tab' },
+  // Weekly Dashboard tabs
+  { id: 'weekly_dashboard_tab_function', name: 'Weekly Dashboard - Function tab', description: 'Access Function tab in Weekly Dashboard', group: 'tab' },
+  { id: 'weekly_dashboard_tab_company', name: 'Weekly Dashboard - Company tab', description: 'Access Company tab in Weekly Dashboard', group: 'tab' },
+  { id: 'weekly_dashboard_tab_location', name: 'Weekly Dashboard - Location tab', description: 'Access Location tab in Weekly Dashboard', group: 'tab' },
+  { id: 'weekly_dashboard_tab_department', name: 'Weekly Dashboard - Department tab', description: 'Access Department tab in Weekly Dashboard', group: 'tab' },
+  // Legacy tab IDs for backward compatibility
+  { id: 'tab_function', name: 'Function tab (legacy)', description: 'Access Function tab (applies to all)', group: 'tab' },
+  { id: 'tab_department', name: 'Department tab (legacy)', description: 'Access Department tab (applies to all)', group: 'tab' },
+  { id: 'tab_company', name: 'Company tab (legacy)', description: 'Access Company tab (applies to all)', group: 'tab' },
+  { id: 'tab_location', name: 'Location tab (legacy)', description: 'Access Location tab (applies to all)', group: 'tab' },
+  { id: 'view_function_wise', name: 'Function wise view', description: 'View data grouped by Function', group: 'view' },
+  { id: 'view_department_wise', name: 'Department wise view', description: 'View data grouped by Department', group: 'view' },
+  { id: 'view_company_wise', name: 'Company wise view', description: 'View data grouped by Company', group: 'view' },
+  { id: 'view_location_wise', name: 'Location wise view', description: 'View data grouped by Location', group: 'view' },
 ]
 
 const TEAMS_PERMISSIONS = [
-  { id: 'user_activity', name: 'User Activity Dashboard', description: 'View Teams user activity analytics' },
-  { id: 'upload_activity', name: 'Upload Activity Files', description: 'Upload Teams activity files' },
-  { id: 'activity_batches', name: 'Activity Files Management', description: 'View and delete uploaded activity files' },
-  { id: 'app_activity', name: 'Teams App Activity', description: 'View Teams app usage analytics' },
-  { id: 'upload_app', name: 'Upload App Usage', description: 'Upload Teams app usage files' },
-  { id: 'app_batches', name: 'App Usage Files Management', description: 'View and delete app usage files' },
-  { id: 'employee_list', name: 'Employee List Management', description: 'Upload and manage employee list files' },
-  { id: 'license_entry', name: 'License Entry', description: 'View Teams license information (Total, Assigned, Free license)' },
-  { id: 'license_edit', name: 'License Edit', description: 'Edit Teams license values (Total, Assigned, Free license)' },
-  { id: 'export', name: 'Export Reports', description: 'Export Teams reports to PDF' }
+  { id: 'user_activity', name: 'User Activity Dashboard', description: 'View Teams user activity analytics', group: 'menu' },
+  { id: 'upload_activity', name: 'Upload Activity Files', description: 'Upload Teams activity files', group: 'menu' },
+  { id: 'activity_batches', name: 'Activity Files Management', description: 'View and delete uploaded activity files', group: 'menu' },
+  { id: 'app_activity', name: 'Teams App Activity', description: 'View Teams app usage analytics', group: 'menu' },
+  { id: 'upload_app', name: 'Upload App Usage', description: 'Upload Teams app usage files', group: 'menu' },
+  { id: 'app_batches', name: 'App Usage Files Management', description: 'View and delete app usage files', group: 'menu' },
+  { id: 'employee_list', name: 'Employee List Management', description: 'Upload and manage employee list files', group: 'menu' },
+  { id: 'license_entry', name: 'License Entry', description: 'View Teams license information', group: 'menu' },
+  { id: 'license_edit', name: 'License Edit', description: 'Edit Teams license values', group: 'menu' },
+  { id: 'teams_user_list', name: 'MS Teams User list', description: 'Upload Excel and view merged Teams/CBL_Teams user list', group: 'menu' },
+  { id: 'export', name: 'Export Reports', description: 'Export Teams reports to PDF', group: 'menu' },
+  { id: 'tab_user_wise', name: 'User Wise tab', description: 'User-wise activity tab', group: 'tab' },
+  { id: 'tab_function_wise', name: 'Function Wise tab', description: 'Function-wise activity tab', group: 'tab' },
+  { id: 'tab_company_wise', name: 'Company Wise tab', description: 'Company-wise activity tab', group: 'tab' },
+  { id: 'tab_cxo', name: 'CXO Comparison tab', description: 'CXO comparison tab', group: 'tab' },
 ]
+
+const BUILTIN_ROLE_NAMES = ['admin', 'user']
+// Check if role is built-in (admin, user, or any N-* level like N, N-1, N-2, N-3, ...)
+const isBuiltinRole = (name) => {
+  if (BUILTIN_ROLE_NAMES.includes(name)) return true
+  return name === 'N' || /^N-\d+$/.test(name)
+}
+
+// Table layout for Role Management (Menu/Sub Menu | Yes/No) – matches spec image
+// Each menu now has unique tab IDs to prevent cross-menu coupling
+const ATTENDANCE_MENU_TABLE = [
+  { type: 'menu', id: 'dashboard', label: 'Dashboard', subMenus: [
+    { id: 'dashboard_tab_function', label: 'Function' }, { id: 'dashboard_tab_company', label: 'Company' }, { id: 'dashboard_tab_location', label: 'Location' }
+  ]},
+  { type: 'menu', id: 'attendance_recognition', label: 'Attendance Recognition' },
+  { type: 'menu', id: 'weekly_dashboard', label: 'Weekly Analytics', subMenus: [
+    { id: 'weekly_dashboard_tab_function', label: 'Function' }, { id: 'weekly_dashboard_tab_company', label: 'Company' }, { id: 'weekly_dashboard_tab_location', label: 'Location' }, { id: 'weekly_dashboard_tab_department', label: 'Department' }
+  ]},
+  { type: 'menu', id: 'user_wise', label: 'User Analytics', subMenus: [
+    { id: 'user_wise_on_time', label: 'On Time %' }, { id: 'user_wise_work_hour', label: 'Work Hour Completion' }, { id: 'user_wise_work_hour_lost', label: 'Work Hour Lost' }, { id: 'user_wise_work_hour_lost_cost', label: 'Lost Hours Cost' }, { id: 'user_wise_leave_analysis', label: 'Leave Analysis' }, { id: 'user_wise_od_analysis', label: 'OD Analysis' }
+  ]},
+  { type: 'menu', id: 'on_time', label: 'On Time %' },
+  { type: 'menu', id: 'work_hour', label: 'Work Hour Completion' },
+  { type: 'menu', id: 'work_hour_lost', label: 'Work Hour Lost', subMenus: [
+    { id: 'cost_settings', label: 'Cost Settings' },
+    { id: 'work_hour_lost_cost', label: 'Lost Hours Cost Analysis' },
+  ]},
+  { type: 'menu', id: 'leave_analysis', label: 'Leave Analysis Adjacent to Weekend and Holiday' },
+  { type: 'menu', id: 'od_analysis', label: 'OD Analysis' },
+  { type: 'menu', id: 'weekly_analysis', label: 'Weekly Analysis' },
+  { type: 'menu', id: 'upload', label: 'Upload Files' },
+  { type: 'menu', id: 'batches', label: 'Upload Batches' },
+]
+
+const TEAMS_MENU_TABLE = [
+  { type: 'menu', id: 'user_activity', label: 'User Activity', subMenus: [
+    { id: 'tab_user_wise', label: 'User-wise' }, { id: 'tab_function_wise', label: 'Function-wise' }, { id: 'tab_company_wise', label: 'Company-wise' }, { id: 'tab_cxo', label: 'CXO Comparison' }
+  ]},
+  { type: 'menu', id: 'license_entry', label: 'Teams License' },
+  { type: 'menu', id: 'teams_user_list', label: 'MS Teams User list' },
+  { type: 'menu', id: 'upload_activity', label: 'Upload Activity Files' },
+  { type: 'menu', id: 'activity_batches', label: 'Uploaded Activity Files' },
+  { type: 'menu', id: 'employee_list', label: 'Upload Employee List / Employee List Files' },
+  { type: 'menu', id: 'app_activity', label: 'Teams App Activity', subMenus: [
+    { id: 'app_activity', label: 'Table View' }, { id: 'app_activity', label: 'Chart View' }
+  ]},
+  { type: 'menu', id: 'upload_app', label: 'Upload App Usage' },
+  { type: 'menu', id: 'app_batches', label: 'App Usage File' },
+]
+
+function SyncRolesButton({ onSuccess }) {
+  const [syncing, setSyncing] = useState(false)
+  const handleSync = async () => {
+    if (syncing) return
+    if (!window.confirm('Set each user\'s role and Data Scope Level to their hierarchy level (N, N-1, N-2, N-3, ...) based on the Employee List? For N-1, N-2, etc., Company, Function, and Department will be auto-assigned from the hierarchy so you don\'t have to set them manually. Users must have Employee Email (Official) set or their login email must match an employee. Admins are skipped.')) return
+    setSyncing(true)
+    try {
+      const res = await syncUsersRolesFromHierarchy()
+      alert(res?.message || `Synced. ${res?.updated ?? 0} user(s) updated.`)
+      onSuccess?.()
+    } catch (e) {
+      alert(e.response?.data?.detail || 'Sync failed.')
+    } finally {
+      setSyncing(false)
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={handleSync}
+      disabled={syncing}
+      className="bg-gradient-to-r from-amber-600 to-amber-700 text-white px-4 py-3 rounded-md hover:from-amber-700 hover:to-amber-800 shadow-lg transform transition-all hover:scale-105 flex items-center gap-2 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+      title="Set each user's role and Company/Function/Department from Employee List (N-1, N-2, etc.)"
+    >
+      <span className={`lnr ${syncing ? 'lnr-sync animate-spin' : 'lnr-users'}`}></span>
+      Sync roles & scope from hierarchy
+    </button>
+  )
+}
 
 export default function UserManagementPage() {
   const navigate = useNavigate()
@@ -52,10 +191,11 @@ export default function UserManagementPage() {
   const [roleForm, setRoleForm] = useState({
     name: '',
     permissions: {
-      attendance_dashboard: { enabled: false, features: [] },
+      attendance_dashboard: { enabled: true, features: [] },
       teams_dashboard: { enabled: false, features: [] }
     }
   })
+
   
   const [formData, setFormData] = useState({
     email: '',
@@ -65,8 +205,15 @@ export default function UserManagementPage() {
     department: '',
     position: '',
     role: 'user',
-    is_active: true
+    is_active: true,
+    employee_email: '',
+    data_scope_level: '',
+    allowed_functions: [],
+    allowed_departments: [],
+    allowed_companies: []
   })
+  const [fillingFromHierarchy, setFillingFromHierarchy] = useState(false)
+  const [rawRowModal, setRawRowModal] = useState(null) // { email, loading, data } for "View in file" modal
 
   const { data: users = [], isLoading, error, refetch } = useQuery({
     queryKey: ['users'],
@@ -90,9 +237,39 @@ export default function UserManagementPage() {
   const { data: roles = [] } = useQuery({
     queryKey: ['roles'],
     queryFn: getRoles,
-    enabled: mainTab === 'roles' || isModalOpen,
+    enabled: mainTab === 'roles' || mainTab === 'users' || isModalOpen,
     refetchOnWindowFocus: false
   })
+
+  const { data: employeeHierarchy = [] } = useQuery({
+    queryKey: ['employeeHierarchy'],
+    queryFn: () => getEmployeeHierarchy(),
+    enabled: mainTab === 'employees',
+    refetchOnWindowFocus: false,
+    refetchOnMount: 'always', // always refetch when opening tab so deleted employee list = empty table
+  })
+
+  const { data: scopeOptions = { functions: [], departments: [], companies: [] } } = useQuery({
+    queryKey: ['scopeOptions'],
+    queryFn: () => getScopeOptions(),
+    enabled: isModalOpen || roleModalOpen || mainTab === 'organization',
+    refetchOnWindowFocus: false
+  })
+
+  // Functions under selected companies only; departments under selected functions only
+  const filteredFunctionOptions = useMemo(() => {
+    const list = scopeOptions.functions || []
+    const companies = formData.allowed_companies || []
+    if (companies.length === 0) return list
+    return list.filter(f => (f && typeof f === 'object' && f.company && companies.includes(f.company)))
+  }, [scopeOptions.functions, formData.allowed_companies])
+
+  const filteredDepartmentOptions = useMemo(() => {
+    const list = scopeOptions.departments || []
+    const functions = formData.allowed_functions || []
+    if (functions.length === 0) return list
+    return list.filter(d => (d && typeof d === 'object' && d.function && functions.includes(d.function)))
+  }, [scopeOptions.departments, formData.allowed_functions])
 
   const createMutation = useMutation({
     mutationFn: createUser,
@@ -229,16 +406,22 @@ export default function UserManagementPage() {
       department: '',
       position: '',
       role: 'user',
-      is_active: true
+      is_active: true,
+      employee_email: '',
+      data_scope_level: '',
+      allowed_functions: [],
+      allowed_departments: [],
+      allowed_companies: []
     })
     setEditingUser(null)
+    setFillingFromHierarchy(false)
   }
 
   const resetRoleForm = () => {
     setRoleForm({
       name: '',
       permissions: {
-        attendance_dashboard: { enabled: false, features: [] },
+        attendance_dashboard: { enabled: true, features: [] },
         teams_dashboard: { enabled: false, features: [] }
       }
     })
@@ -254,7 +437,12 @@ export default function UserManagementPage() {
       department: formData.department,
       position: formData.position,
       role: formData.role,
-      is_active: formData.is_active
+      is_active: formData.is_active,
+      employee_email: formData.employee_email?.trim() || null,
+      data_scope_level: formData.data_scope_level?.trim() || null,
+      allowed_functions: Array.isArray(formData.allowed_functions) ? formData.allowed_functions : [],
+      allowed_departments: Array.isArray(formData.allowed_departments) ? formData.allowed_departments : [],
+      allowed_companies: Array.isArray(formData.allowed_companies) ? formData.allowed_companies : []
     }
     if (editingUser && formData.password) submitData.password = formData.password
     if (!editingUser) submitData.password = formData.password || '123456'
@@ -267,6 +455,11 @@ export default function UserManagementPage() {
 
   const handleEdit = (user) => {
     setEditingUser(user)
+    const initialAllowed = {
+      allowed_functions: Array.isArray(user.allowed_functions) ? user.allowed_functions : [],
+      allowed_departments: Array.isArray(user.allowed_departments) ? user.allowed_departments : [],
+      allowed_companies: Array.isArray(user.allowed_companies) ? user.allowed_companies : [],
+    }
     setFormData({
       email: user.email,
       username: user.username,
@@ -277,12 +470,30 @@ export default function UserManagementPage() {
       position: user.position || '',
       role: user.role,
       is_active: user.is_active,
+      employee_email: user.employee_email || '',
+      data_scope_level: user.data_scope_level || '',
+      ...initialAllowed,
       permissions: user.permissions || {
         attendance_dashboard: { enabled: false, features: [] },
         teams_dashboard: { enabled: false, features: [] }
       }
     })
     setIsModalOpen(true)
+    // Pre-fill Allowed Companies/Functions/Departments from hierarchy when user has employee link and N-level role
+    const empEmail = (user.employee_email || '').trim()
+    const scopeLevel = (user.data_scope_level || '').trim()
+    if (empEmail && scopeLevel && isNLevel(scopeLevel)) {
+      getScopeFromHierarchy(empEmail, scopeLevel)
+        .then((scope) => {
+          setFormData((prev) => ({
+            ...prev,
+            allowed_companies: scope.allowed_companies || [],
+            allowed_functions: scope.allowed_functions || [],
+            allowed_departments: scope.allowed_departments || [],
+          }))
+        })
+        .catch(() => { /* keep initial allowed values on error */ })
+    }
   }
 
   const handleDelete = (user) => {
@@ -363,14 +574,13 @@ export default function UserManagementPage() {
 
   const handleEditRole = (role) => {
     setEditingRole(role)
+    const perms = role.permissions && typeof role.permissions === 'object' ? role.permissions : {}
     setRoleForm({
       name: role.name,
-      permissions: role.permissions && typeof role.permissions === 'object'
-        ? {
-            attendance_dashboard: role.permissions.attendance_dashboard || { enabled: false, features: [] },
-            teams_dashboard: role.permissions.teams_dashboard || { enabled: false, features: [] }
-          }
-        : { attendance_dashboard: { enabled: false, features: [] }, teams_dashboard: { enabled: false, features: [] } }
+      permissions: {
+        attendance_dashboard: perms.attendance_dashboard || { enabled: true, features: [] },
+        teams_dashboard: perms.teams_dashboard || { enabled: false, features: [] }
+      }
     })
     setRoleModalOpen(true)
   }
@@ -440,11 +650,224 @@ export default function UserManagementPage() {
             >
               Role management
             </button>
+            <button
+              type="button"
+              onClick={() => setMainTab('employees')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mainTab === 'employees' ? 'bg-white text-gray-800' : 'bg-white/10 text-white hover:bg-white/20'}`}
+            >
+              Employees (N / N-1 / N-2)
+            </button>
+            <button
+              type="button"
+              onClick={() => setMainTab('organization')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mainTab === 'organization' ? 'bg-white text-gray-800' : 'bg-white/10 text-white hover:bg-white/20'}`}
+            >
+              Organization
+            </button>
+            <button
+              type="button"
+              onClick={() => setMainTab('teams_user_list')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mainTab === 'teams_user_list' ? 'bg-white text-gray-800' : 'bg-white/10 text-white hover:bg-white/20'}`}
+            >
+              MS Teams User list
+            </button>
           </div>
         </div>
       </header>
 
       <main className="max-w-7xl mx-auto px-4 py-8">
+        {mainTab === 'teams_user_list' && (
+          <TeamsUserListPage />
+        )}
+
+        {mainTab === 'organization' && (
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-xl font-bold text-gray-800">Companies, Functions &amp; Departments</h2>
+              <p className="text-sm text-gray-600 mt-1">
+                These lists are derived from uploaded <strong>Employee List</strong> files. To add or change companies, functions, or departments, upload or update an Employee List file (Teams module → Upload Employee List / Employee List Files).
+              </p>
+            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <div className="bg-white rounded-lg shadow-lg border border-gray-200 overflow-hidden">
+                <div className="px-4 py-3 bg-gray-100 border-b border-gray-200">
+                  <h3 className="text-sm font-semibold text-gray-800 uppercase">Companies</h3>
+                </div>
+                <ul className="divide-y divide-gray-200 max-h-64 overflow-y-auto">
+                  {(scopeOptions.companies || []).length === 0 ? (
+                    <li className="px-4 py-3 text-sm text-gray-500">No companies (upload Employee List first)</li>
+                  ) : (
+                    (scopeOptions.companies || []).map((c, i) => (
+                      <li key={i} className="px-4 py-2 text-sm text-gray-700">{c}</li>
+                    ))
+                  )}
+                </ul>
+              </div>
+              <div className="bg-white rounded-lg shadow-lg border border-gray-200 overflow-hidden">
+                <div className="px-4 py-3 bg-gray-100 border-b border-gray-200">
+                  <h3 className="text-sm font-semibold text-gray-800 uppercase">Functions (with company)</h3>
+                </div>
+                <ul className="divide-y divide-gray-200 max-h-64 overflow-y-auto">
+                  {(scopeOptions.functions || []).length === 0 ? (
+                    <li className="px-4 py-3 text-sm text-gray-500">No functions (upload Employee List first)</li>
+                  ) : (
+                    (scopeOptions.functions || []).map((f, i) => (
+                      <li key={i} className="px-4 py-2 text-sm text-gray-700">
+                        {typeof f === 'string' ? f : `${f.name || f}${f.company ? ` — ${f.company}` : ''}`}
+                      </li>
+                    ))
+                  )}
+                </ul>
+              </div>
+              <div className="bg-white rounded-lg shadow-lg border border-gray-200 overflow-hidden">
+                <div className="px-4 py-3 bg-gray-100 border-b border-gray-200">
+                  <h3 className="text-sm font-semibold text-gray-800 uppercase">Departments (function, company)</h3>
+                </div>
+                <ul className="divide-y divide-gray-200 max-h-64 overflow-y-auto">
+                  {(scopeOptions.departments || []).length === 0 ? (
+                    <li className="px-4 py-3 text-sm text-gray-500">No departments (upload Employee List first)</li>
+                  ) : (
+                    (scopeOptions.departments || []).map((d, i) => (
+                      <li key={i} className="px-4 py-2 text-sm text-gray-700">
+                        {typeof d === 'string' ? d : `${d.name || d}${d.function ? ` — ${d.function}` : ''}${d.company ? ` (${d.company})` : ''}`}
+                      </li>
+                    ))
+                  )}
+                </ul>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {mainTab === 'employees' && (
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-xl font-bold text-gray-800">Employee hierarchy (N, N-1, N-2)</h2>
+              <p className="text-sm text-gray-600 mt-1">
+                Built from the latest <strong>Employee List file</strong> you upload (User Management → Employee list / Batches). Company, Function, and Department come from that file’s columns (e.g. Company Name, Function Name or Function, Department Name). Levels (N, N-1, N-2) use Supervisor Name and Line Manager Employee ID. To fix wrong info (e.g. function for irina.const), update the Employee List Excel/CSV and re-upload. Link users to employees and set data scope in the Users tab.
+              </p>
+            </div>
+            <div className="bg-white rounded-lg shadow-lg overflow-hidden border border-gray-200">
+              <div className="overflow-x-auto max-h-[600px]">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="sticky top-0 z-10 bg-gray-100">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-800 uppercase">Name</th>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-800 uppercase">Email</th>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-800 uppercase">Employee Code</th>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-800 uppercase">Company</th>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-800 uppercase">Function</th>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-800 uppercase">Department</th>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-800 uppercase">Supervisor</th>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-800 uppercase">Line Manager ID</th>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-800 uppercase">Level</th>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-800 uppercase">Source file</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {employeeHierarchy.length === 0 && (
+                      <tr>
+                        <td colSpan={11} className="px-6 py-8 text-center text-gray-500">
+                          No employee data. Upload an Employee List file (with Supervisor Name and Line Manager Employee ID) first.
+                        </td>
+                      </tr>
+                    )}
+                    {employeeHierarchy.map((emp, idx) => (
+                      <tr key={idx} className="hover:bg-gray-50">
+                        <td className="px-6 py-3 text-sm text-gray-900">{emp.name || '—'}</td>
+                        <td className="px-6 py-3 text-sm text-gray-700">{emp.email || '—'}</td>
+                        <td className="px-6 py-3 text-sm text-gray-700">{emp.employee_code || '—'}</td>
+                        <td className="px-6 py-3 text-sm text-gray-700">{emp.company || '—'}</td>
+                        <td className="px-6 py-3 text-sm text-gray-700">{emp.function || '—'}</td>
+                        <td className="px-6 py-3 text-sm text-gray-700">{emp.department || '—'}</td>
+                        <td className="px-6 py-3 text-sm text-gray-700">{emp.supervisor_name || '—'}</td>
+                        <td className="px-6 py-3 text-sm text-gray-700">{emp.line_manager_employee_id || '—'}</td>
+                        <td className="px-6 py-3">
+                          <span className={`px-2 py-1 text-xs font-medium rounded ${
+                            emp.level === 'N' ? 'bg-amber-100 text-amber-800' :
+                            emp.level === 'N-1' ? 'bg-blue-100 text-blue-800' :
+                            emp.level === 'N-2' ? 'bg-green-100 text-green-800' :
+                            'bg-gray-100 text-gray-800'
+                          }`}>
+                            {emp.level || '—'}
+                          </span>
+                        </td>
+                        <td className="px-6 py-3 text-xs text-gray-500" title="Uploaded Employee List file this row was read from">
+                          {emp.source_filename || '—'}
+                        </td>
+                        <td className="px-6 py-3">
+                          <button
+                            type="button"
+                            className="text-xs text-blue-600 hover:underline"
+                            onClick={() => {
+                              setRawRowModal({ email: emp.email, loading: true, data: null })
+                              getEmployeeRowByEmail(emp.email)
+                                .then((d) => setRawRowModal({ email: emp.email, loading: false, data: d }))
+                                .catch(() => setRawRowModal((m) => m ? { ...m, loading: false, data: { found: false } } : null))
+                            }}
+                          >
+                            View in file
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {rawRowModal && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setRawRowModal(null)}>
+                <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+                  <div className="px-6 py-4 border-b flex justify-between items-center">
+                    <h3 className="text-lg font-semibold">Row in Employee List file: {rawRowModal.email}</h3>
+                    <button type="button" className="text-gray-500 hover:text-gray-700" onClick={() => setRawRowModal(null)}>×</button>
+                  </div>
+                  <div className="p-6 overflow-auto">
+                    {rawRowModal.loading && <p className="text-gray-500">Loading…</p>}
+                    {!rawRowModal.loading && rawRowModal.data && (
+                      <>
+                        {rawRowModal.data.found ? (
+                          <>
+                            <p className="text-sm text-gray-600 mb-2">Source: <strong>{rawRowModal.data.source_filename || '—'}</strong></p>
+                            <p className="text-xs font-semibold text-gray-700 mb-1">Mapped (what the app uses):</p>
+                            <ul className="text-sm mb-4 list-disc list-inside">
+                              <li><strong>Company:</strong> {rawRowModal.data.mapped?.company || '—'}</li>
+                              <li><strong>Function:</strong> {rawRowModal.data.mapped?.function || '—'}</li>
+                              <li><strong>Department:</strong> {rawRowModal.data.mapped?.department || '—'}</li>
+                            </ul>
+                            <p className="text-xs font-semibold text-gray-700 mb-1">All columns in the Excel row (exact names and values):</p>
+                            <div className="border rounded overflow-x-auto max-h-60 overflow-y-auto">
+                              <table className="min-w-full text-xs">
+                                <thead className="bg-gray-100 sticky top-0">
+                                  <tr><th className="px-2 py-1 text-left">Column</th><th className="px-2 py-1 text-left">Value</th></tr>
+                                </thead>
+                                <tbody>
+                                  {(rawRowModal.data.header_order && rawRowModal.data.header_order.length
+                                    ? rawRowModal.data.header_order
+                                    : Object.keys(rawRowModal.data.row || {})
+                                  ).map((col) => (
+                                    <tr key={col} className="border-t">
+                                      <td className="px-2 py-1 font-medium text-gray-700">{col}</td>
+                                      <td className="px-2 py-1">{String((rawRowModal.data.row || {})[col] ?? '')}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </>
+                        ) : (
+                            <p className="text-gray-600">{rawRowModal.data.message || 'Row not found for this email in the latest file.'}</p>
+                          )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {mainTab === 'roles' && (
           <div className="space-y-6">
             <div className="flex items-center justify-between">
@@ -490,7 +913,7 @@ export default function UserManagementPage() {
                         >
                           Edit
                         </button>
-                        {!['admin', 'user'].includes(r.name) && (
+                        {!isBuiltinRole(r.name) && (
                           <button
                             type="button"
                             onClick={() => handleDeleteRole(r)}
@@ -591,6 +1014,7 @@ export default function UserManagementPage() {
               <span className={`lnr ${isLoading ? 'lnr-sync animate-spin' : 'lnr-sync'}`}></span>
               Refresh
             </button>
+            <SyncRolesButton onSuccess={() => refetch()} />
             {filteredUsers.length > 0 && (
               <>
                 <button
@@ -751,8 +1175,8 @@ export default function UserManagementPage() {
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-800 uppercase tracking-wider w-12">Select</th>
                     <th className="px-6 py-3 text-left text-xs font-semibold text-gray-800 uppercase tracking-wider">User</th>
                     <th className="px-6 py-3 text-left text-xs font-semibold text-gray-800 uppercase tracking-wider">Email (Official)</th>
-                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-800 uppercase tracking-wider">Function</th>
                     <th className="px-6 py-3 text-left text-xs font-semibold text-gray-800 uppercase tracking-wider">Role</th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-800 uppercase tracking-wider max-w-[220px]">Allowed: Companies / Functions / Departments</th>
                     <th className="px-6 py-3 text-left text-xs font-semibold text-gray-800 uppercase tracking-wider">Status</th>
                     <th className="px-6 py-3 text-left text-xs font-semibold text-gray-800 uppercase tracking-wider">Last Login</th>
                     <th className="px-6 py-3 text-left text-xs font-semibold text-gray-800 uppercase tracking-wider">Actions</th>
@@ -761,7 +1185,7 @@ export default function UserManagementPage() {
                 <tbody className="bg-white divide-y divide-gray-200">
                   {filteredUsers.length === 0 && users.length === 0 && !isLoading && (
                     <tr>
-                      <td colSpan={8} className="px-6 py-8 text-center text-gray-500">
+                      <td colSpan={9} className="px-6 py-8 text-center text-gray-500">
                         <div>
                           <p className="mb-2">No users found in the database.</p>
                           <button
@@ -776,7 +1200,7 @@ export default function UserManagementPage() {
                   )}
                   {filteredUsers.length === 0 && users.length > 0 && (
                     <tr>
-                      <td colSpan={8} className="px-6 py-8 text-center text-gray-500">
+                      <td colSpan={9} className="px-6 py-8 text-center text-gray-500">
                         No users found matching your search/filter criteria. Try clearing filters.
                       </td>
                     </tr>
@@ -808,9 +1232,6 @@ export default function UserManagementPage() {
                         <div className="text-sm text-gray-900">{user.email || '-'}</div>
                       </td>
                       <td className="px-6 py-4">
-                        <div className="text-sm text-gray-900">{user.department || '-'}</div>
-                      </td>
-                      <td className="px-6 py-4">
                         <span className={`px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${
                           user.role === 'admin' 
                             ? 'bg-purple-100 text-purple-800' 
@@ -818,6 +1239,30 @@ export default function UserManagementPage() {
                         }`}>
                           {user.role.toUpperCase()}
                         </span>
+                      </td>
+                      <td className="px-6 py-4 max-w-[220px]">
+                        <div className="text-xs text-gray-700 space-y-1">
+                          {(() => {
+                            const companies = Array.isArray(user.allowed_companies) ? user.allowed_companies : []
+                            const functions = Array.isArray(user.allowed_functions) ? user.allowed_functions : []
+                            const departments = Array.isArray(user.allowed_departments) ? user.allowed_departments : []
+                            const hasAny = companies.length > 0 || functions.length > 0 || departments.length > 0
+                            if (!hasAny) return <span className="text-gray-500">Default (Employee + scope)</span>
+                            return (
+                              <>
+                                {companies.length > 0 && (
+                                  <div><span className="font-medium text-gray-600">Companies:</span> {companies.join(', ')}</div>
+                                )}
+                                {functions.length > 0 && (
+                                  <div><span className="font-medium text-gray-600">Functions:</span> {functions.join(', ')}</div>
+                                )}
+                                {departments.length > 0 && (
+                                  <div><span className="font-medium text-gray-600">Departments:</span> {departments.join(', ')}</div>
+                                )}
+                              </>
+                            )
+                          })()}
+                        </div>
                       </td>
                       <td className="px-6 py-4">
                         <span className={`px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${
@@ -829,7 +1274,7 @@ export default function UserManagementPage() {
                         </span>
                       </td>
                       <td className="px-6 py-4 text-sm text-gray-500">
-                        {user.last_login ? new Date(user.last_login).toLocaleString() : 'Never'}
+                        {user.last_login ? (parseUtcDate(user.last_login)?.toLocaleString() ?? 'Never') : 'Never'}
                       </td>
                       <td className="px-6 py-4 text-sm font-medium">
                         <div className="flex items-center gap-3">
@@ -955,7 +1400,11 @@ export default function UserManagementPage() {
                         </label>
                         <select
                           value={formData.role}
-                          onChange={(e) => setFormData({ ...formData, role: e.target.value })}
+                          onChange={(e) => {
+                            const newRole = e.target.value
+                            const scopeLevel = isNLevel(newRole) ? newRole : formData.data_scope_level
+                            setFormData({ ...formData, role: newRole, data_scope_level: scopeLevel })
+                          }}
                           className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                           required
                         >
@@ -965,7 +1414,7 @@ export default function UserManagementPage() {
                             </option>
                           ))}
                         </select>
-                        <p className="text-xs text-gray-500 mt-1">Permissions are defined in Role Management</p>
+                        <p className="text-xs text-gray-500 mt-1">Permissions are defined in Role Management. Roles <strong>N</strong>, <strong>N-1</strong>, <strong>N-2</strong>, <strong>N-3</strong>, etc. auto-set Data Scope Level; data access is derived from <strong>Employee Email</strong> in the Employee List.</p>
                       </div>
 
                       <div>
@@ -994,6 +1443,146 @@ export default function UserManagementPage() {
                             className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
                           />
                           <span className="text-sm text-gray-700">Active</span>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Employee Email (Official)
+                        </label>
+                        <input
+                          type="email"
+                          value={formData.employee_email}
+                          onChange={(e) => setFormData({ ...formData, employee_email: e.target.value })}
+                          placeholder="Link to employee list for data scope (N/N-1/N-2)"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">Must match Email (Official) in Employee List. Used with Data Scope Level.</p>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Data Scope Level
+                        </label>
+                        <select
+                          value={formData.data_scope_level}
+                          onChange={(e) => setFormData({ ...formData, data_scope_level: e.target.value })}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        >
+                          {DATA_SCOPE_LEVELS.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                          {/* Include current value if it's an N-level not in the predefined list */}
+                          {formData.data_scope_level && isNLevel(formData.data_scope_level) && !DATA_SCOPE_LEVELS.some(o => o.value === formData.data_scope_level) && (
+                            <option value={formData.data_scope_level}>
+                              {formData.data_scope_level} — Own department only
+                            </option>
+                          )}
+                        </select>
+                        <p className="text-xs text-gray-500 mt-1">N = all; N-1 = function + depts; N-2 = department only. Auto-set when Role is N, N-1, or N-2. Requires Employee Email.</p>
+                      </div>
+
+                      <div className="md:col-span-2 border-t border-gray-200 pt-4 mt-2">
+                        <div className="flex flex-wrap items-center gap-2 mb-3">
+                          <p className="text-sm font-semibold text-gray-800">Allow or disallow access by company, function, department</p>
+                          <button
+                            type="button"
+                            disabled={fillingFromHierarchy || !(formData.employee_email || '').trim() || !(formData.data_scope_level || '').trim() || !isNLevel((formData.data_scope_level || '').trim())}
+                            onClick={() => {
+                              const emp = (formData.employee_email || '').trim()
+                              const lvl = (formData.data_scope_level || '').trim()
+                              if (!emp || !lvl) return
+                              setFillingFromHierarchy(true)
+                              getScopeFromHierarchy(emp, lvl)
+                                .then((scope) => {
+                                  setFormData((prev) => ({
+                                    ...prev,
+                                    allowed_companies: scope.allowed_companies || [],
+                                    allowed_functions: scope.allowed_functions || [],
+                                    allowed_departments: scope.allowed_departments || [],
+                                  }))
+                                })
+                                .catch(() => {})
+                                .finally(() => setFillingFromHierarchy(false))
+                            }}
+                            className="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-100 text-blue-800 hover:bg-blue-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {fillingFromHierarchy ? 'Filling…' : 'Fill from hierarchy'}
+                          </button>
+                        </div>
+                        <p className="text-xs text-gray-500 mb-3">Select which companies, functions, and departments this user can see. If you select any, the user sees only those. Use &quot;Fill from hierarchy&quot; when Employee Email and Data scope level are set (N, N-1, N-2).</p>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Companies</label>
+                            <MultiSelectSearchable
+                              id="allowed-companies"
+                              value={formData.allowed_companies || []}
+                              onChange={(v) => setFormData({ ...formData, allowed_companies: v })}
+                              options={(scopeOptions.companies || []).map(c => ({ value: c, label: c }))}
+                              placeholder="Select companies..."
+                              className="min-w-0"
+                              showSelectAll
+                            />
+                            <div className="mt-1.5 flex flex-wrap gap-1 min-h-[24px]">
+                              {(formData.allowed_companies || []).length === 0 ? (
+                                <span className="text-xs text-gray-400">None selected</span>
+                              ) : (
+                                (formData.allowed_companies || []).map((c) => (
+                                  <span key={c} className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                                    {c}
+                                  </span>
+                                ))
+                              )}
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Functions</label>
+                            <MultiSelectSearchable
+                              id="allowed-functions"
+                              value={formData.allowed_functions || []}
+                              onChange={(v) => setFormData({ ...formData, allowed_functions: v })}
+                              options={filteredFunctionOptions.map(f => ({ value: typeof f === 'string' ? f : f.name, label: typeof f === 'string' ? f : f.name }))}
+                              placeholder={formData.allowed_companies?.length ? 'Select functions under selected companies...' : 'Select functions...'}
+                              className="min-w-0"
+                              showSelectAll
+                            />
+                            <div className="mt-1.5 flex flex-wrap gap-1 min-h-[24px]">
+                              {(formData.allowed_functions || []).length === 0 ? (
+                                <span className="text-xs text-gray-400">None selected</span>
+                              ) : (
+                                (formData.allowed_functions || []).map((f) => (
+                                  <span key={f} className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                                    {f}
+                                  </span>
+                                ))
+                              )}
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Departments</label>
+                            <MultiSelectSearchable
+                              id="allowed-departments"
+                              value={formData.allowed_departments || []}
+                              onChange={(v) => setFormData({ ...formData, allowed_departments: v })}
+                              options={filteredDepartmentOptions.map(d => ({ value: typeof d === 'string' ? d : d.name, label: typeof d === 'string' ? d : d.name }))}
+                              placeholder={formData.allowed_functions?.length ? 'Select departments under selected functions...' : 'Select departments...'}
+                              className="min-w-0"
+                              showSelectAll
+                            />
+                            <div className="mt-1.5 flex flex-wrap gap-1 min-h-[24px]">
+                              {(formData.allowed_departments || []).length === 0 ? (
+                                <span className="text-xs text-gray-400">None selected</span>
+                              ) : (
+                                (formData.allowed_departments || []).map((d) => (
+                                  <span key={d} className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                                    {d}
+                                  </span>
+                                ))
+                              )}
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -1059,110 +1648,106 @@ export default function UserManagementPage() {
                       onChange={(e) => setRoleForm({ ...roleForm, name: e.target.value })}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
                       required
-                      disabled={editingRole && ['admin', 'user'].includes(editingRole.name)}
+                      disabled={editingRole && isBuiltinRole(editingRole.name)}
                     />
-                    {editingRole && ['admin', 'user'].includes(editingRole.name) && (
+                    {editingRole && isBuiltinRole(editingRole.name) && (
                       <p className="text-xs text-gray-500 mt-1">Built-in roles cannot be renamed</p>
                     )}
                   </div>
 
-                  <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-lg p-4">
-                    <p className="text-sm text-purple-800">
-                      <strong>Configure Access:</strong> Select which modules and menus (features) users with this role can access.
-                    </p>
+                  {/* Attendance Monitoring Dashboard – Menu/Sub Menu | Yes/No */}
+                  <div className="border border-gray-200 rounded-lg overflow-hidden">
+                    <h3 className="px-4 py-2 bg-purple-100 font-semibold text-gray-800">Attendance Monitoring Dashboard</h3>
+                    <table className="min-w-full divide-y divide-gray-200">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-4 py-2 text-left text-xs font-semibold text-gray-700 uppercase">Menu / Sub Menu</th>
+                          <th className="px-4 py-2 text-center text-xs font-semibold text-gray-700 uppercase w-24">Yes/No</th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-200">
+                        {ATTENDANCE_MENU_TABLE.map((row, idx) => (
+                          <Fragment key={`att-${idx}`}>
+                            <tr className={row.subMenus ? 'bg-gray-50' : ''}>
+                              <td className="px-4 py-2 text-sm text-gray-900">{row.label}</td>
+                              <td className="px-4 py-2 text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={roleForm.permissions.attendance_dashboard?.features?.includes(row.id) || false}
+                                  onChange={() => toggleRoleFeature('attendance_dashboard', row.id)}
+                                  className="h-4 w-4 text-purple-600 rounded"
+                                />
+                              </td>
+                            </tr>
+                            {(row.subMenus || []).map((sub, sidx) => (
+                              <tr key={`att-${idx}-${sidx}`}>
+                                <td className="px-4 py-1.5 pl-8 text-sm text-gray-700">{sub.label}</td>
+                                <td className="px-4 py-1.5 text-center">
+                                  <input
+                                    type="checkbox"
+                                    checked={roleForm.permissions.attendance_dashboard?.features?.includes(sub.id) || false}
+                                    onChange={() => toggleRoleFeature('attendance_dashboard', sub.id)}
+                                    className="h-4 w-4 text-purple-600 rounded"
+                                  />
+                                </td>
+                              </tr>
+                            ))}
+                          </Fragment>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
 
-                  {MODULES.map(module => (
-                    <div 
-                      key={module.id} 
-                      className={`border-2 rounded-xl p-5 transition-all ${
-                        roleForm.permissions[module.id]?.enabled 
-                          ? 'border-purple-500 bg-gradient-to-br from-purple-50 to-indigo-50 shadow-md' 
-                          : 'border-gray-200 bg-white hover:border-gray-300'
-                      }`}
-                    >
-                      <div className="flex items-start gap-4 mb-4">
-                        <div className="flex-shrink-0 mt-1">
-                          <input
-                            type="checkbox"
-                            checked={roleForm.permissions[module.id]?.enabled || false}
-                            onChange={() => toggleRoleModule(module.id)}
-                            className="h-6 w-6 text-purple-600 focus:ring-2 focus:ring-purple-500 border-gray-300 rounded cursor-pointer"
-                          />
-                        </div>
-                        <div className="flex-1">
-                          <div className="flex items-center gap-3 mb-2">
-                            {module.id === 'attendance_dashboard' && (
-                              <span className="lnr lnr-calendar-full text-2xl text-purple-600"></span>
-                            )}
-                            {module.id === 'teams_dashboard' && (
-                              <span className="lnr lnr-users text-2xl text-indigo-600"></span>
-                            )}
-                            <h4 className="text-lg font-bold text-gray-900">{module.name}</h4>
-                          </div>
-                          <p className="text-sm text-gray-600 ml-9">{module.description}</p>
-                        </div>
-                      </div>
-
-                      {module.id === 'attendance_dashboard' && roleForm.permissions[module.id]?.enabled && (
-                        <div className="ml-10 mt-4 space-y-3 pl-4 border-l-4 border-purple-400">
-                          <p className="text-sm font-bold text-gray-800 uppercase tracking-wide mb-3">Menus (Features):</p>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                            {ATTENDANCE_PERMISSIONS.map(feature => (
-                              <label 
-                                key={feature.id} 
-                                className={`flex items-start gap-3 cursor-pointer p-3 rounded-lg transition-all ${
-                                  roleForm.permissions[module.id]?.features?.includes(feature.id)
-                                    ? 'bg-purple-100 border-2 border-purple-400 shadow-sm'
-                                    : 'bg-gray-50 border-2 border-gray-200 hover:bg-gray-100'
-                                }`}
-                              >
+                  {/* MS Teams User Activity Dashboard – Menu/Sub Menu | Yes/No */}
+                  <div className="border border-gray-200 rounded-lg overflow-hidden">
+                    <h3 className="px-4 py-2 bg-indigo-100 font-semibold text-gray-800">MS Teams User Activity Dashboard</h3>
+                    <table className="min-w-full divide-y divide-gray-200">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-4 py-2 text-left text-xs font-semibold text-gray-700 uppercase">Menu / Sub Menu</th>
+                          <th className="px-4 py-2 text-center text-xs font-semibold text-gray-700 uppercase w-24">Yes/No</th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-200">
+                        {TEAMS_MENU_TABLE.map((row, idx) => (
+                          <Fragment key={`teams-${idx}`}>
+                            <tr className={row.subMenus ? 'bg-gray-50' : ''}>
+                              <td className="px-4 py-2 text-sm text-gray-900">{row.label}</td>
+                              <td className="px-4 py-2 text-center">
                                 <input
                                   type="checkbox"
-                                  checked={roleForm.permissions[module.id]?.features?.includes(feature.id) || false}
-                                  onChange={() => toggleRoleFeature(module.id, feature.id)}
-                                  className="h-5 w-5 text-purple-600 focus:ring-2 focus:ring-purple-500 border-gray-300 rounded mt-0.5 cursor-pointer"
+                                  checked={roleForm.permissions.teams_dashboard?.features?.includes(row.id) || false}
+                                  onChange={() => toggleRoleFeature('teams_dashboard', row.id)}
+                                  className="h-4 w-4 text-indigo-600 rounded"
                                 />
-                                <div className="flex-1">
-                                  <div className="text-sm font-semibold text-gray-900 mb-1">{feature.name}</div>
-                                  <div className="text-xs text-gray-600">{feature.description}</div>
-                                </div>
-                              </label>
+                              </td>
+                            </tr>
+                            {(row.subMenus || []).map((sub, sidx) => (
+                              <tr key={`teams-${idx}-${sidx}`}>
+                                <td className="px-4 py-1.5 pl-8 text-sm text-gray-700">{sub.label}</td>
+                                <td className="px-4 py-1.5 text-center">
+                                  <input
+                                    type="checkbox"
+                                    checked={roleForm.permissions.teams_dashboard?.features?.includes(sub.id) || false}
+                                    onChange={() => toggleRoleFeature('teams_dashboard', sub.id)}
+                                    className="h-4 w-4 text-indigo-600 rounded"
+                                  />
+                                </td>
+                              </tr>
                             ))}
-                          </div>
-                        </div>
-                      )}
+                          </Fragment>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
 
-                      {module.id === 'teams_dashboard' && roleForm.permissions[module.id]?.enabled && (
-                        <div className="ml-10 mt-4 space-y-3 pl-4 border-l-4 border-indigo-400">
-                          <p className="text-sm font-bold text-gray-800 uppercase tracking-wide mb-3">Menus (Features):</p>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                            {TEAMS_PERMISSIONS.map(feature => (
-                              <label 
-                                key={feature.id} 
-                                className={`flex items-start gap-3 cursor-pointer p-3 rounded-lg transition-all ${
-                                  roleForm.permissions[module.id]?.features?.includes(feature.id)
-                                    ? 'bg-indigo-100 border-2 border-indigo-400 shadow-sm'
-                                    : 'bg-gray-50 border-2 border-gray-200 hover:bg-gray-100'
-                                }`}
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={roleForm.permissions[module.id]?.features?.includes(feature.id) || false}
-                                  onChange={() => toggleRoleFeature(module.id, feature.id)}
-                                  className="h-5 w-5 text-indigo-600 focus:ring-2 focus:ring-indigo-500 border-gray-300 rounded mt-0.5 cursor-pointer"
-                                />
-                                <div className="flex-1">
-                                  <div className="text-sm font-semibold text-gray-900 mb-1">{feature.name}</div>
-                                  <div className="text-xs text-gray-600">{feature.description}</div>
-                                </div>
-                              </label>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                  {/* Data visibility is user-wise, not role-wise */}
+                  <div className="border border-blue-200 rounded-lg p-4 bg-blue-50">
+                    <p className="text-sm font-semibold text-blue-900 mb-1">Data visibility (Company, Function, Department) is user-wise</p>
+                    <p className="text-xs text-blue-800">
+                      Which data a user sees is set per <strong>user</strong> (when creating/editing a user), not per role. Link the user to an employee via <strong>Employee Email</strong> and set <strong>Data scope level</strong>: <strong>N</strong> = see all companies, functions &amp; departments (e.g. MD); <strong>N-1</strong> = see own function and all departments under it; <strong>N-2</strong> = see only own department. Optionally add more allowed functions/departments/companies in the user form to grant extra access.
+                    </p>
+                  </div>
                 </div>
               </div>
 

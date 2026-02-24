@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Boolean
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Boolean, Float
 from sqlalchemy.dialects.mysql import JSON as MySQLJSON
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -95,6 +95,13 @@ class User(Base):
     full_name = Column(String(255), nullable=True)
     role = Column(String(50), nullable=False, default="user")  # admin (special) or role name from roles table
     is_active = Column(Boolean, default=True, nullable=False)
+    # Data scope: link to employee list by email; level N = all, N-1 = function + depts, N-2 = department only
+    employee_email = Column(String(255), nullable=True, index=True)  # match Email (Official) in employee list
+    data_scope_level = Column(String(20), nullable=True)  # "N", "N-1", "N-2", ... or null = no scope filter
+    # Multi-select: user can see data for these (empty = only own from employee). Admin can add more.
+    allowed_functions = Column(MySQLJSON, nullable=True, default=list)   # ["Function A", "Function B"]
+    allowed_departments = Column(MySQLJSON, nullable=True, default=list)
+    allowed_companies = Column(MySQLJSON, nullable=True, default=list)
     phone = Column(String(20), nullable=True)
     department = Column(String(100), nullable=True)
     position = Column(String(100), nullable=True)
@@ -202,6 +209,32 @@ class CXOUser(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+# ===== App Config (key-value for CTC per hour, etc.) =====
+
+class AppConfig(Base):
+    """Key-value store for app-wide settings (e.g. average CTC per employee per hour in BDT)."""
+    __tablename__ = "app_config"
+
+    key = Column(String(255), primary_key=True)  # e.g. "ctc_per_hour_bdt" or "ctc_per_hour_bdt:Function Name"
+    value = Column(String(512), nullable=True)
+
+
+# ===== Teams User List (latest upload snapshot for Teams/CBL_Teams Excel) =====
+
+class TeamsUserListUpload(Base):
+    """Stores the latest Teams User List upload (Teams + CBL_Teams sheets) so the list persists in DB."""
+    __tablename__ = "teams_user_list_upload"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    filename = Column(String(255), nullable=False)
+    uploaded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    total_assigned = Column(Integer, nullable=False, default=0)
+    by_sheet = Column(MySQLJSON, nullable=True)  # e.g. {"Teams": 100, "CBL_Teams": 53}
+    total_teams = Column(Integer, nullable=False, default=0)
+    free = Column(Integer, nullable=False, default=0)
+    rows = Column(MySQLJSON, nullable=True)  # list of dicts: S.No, Sheet, Name, Email, etc.
+
+
 # ===== Teams License Settings Model =====
 
 class TeamsLicense(Base):
@@ -212,5 +245,8 @@ class TeamsLicense(Base):
     total_teams = Column(Integer, nullable=False, default=0)
     total_assigned = Column(Integer, nullable=False, default=0)
     free = Column(Integer, nullable=False, default=0)
+    per_license_cost = Column(Float, nullable=True)  # Cost per license (e.g. per year); null = not set
+    ciplc_license = Column(Integer, nullable=False, default=0)  # CIPLC license count
+    cbl_license = Column(Integer, nullable=False, default=0)  # CBL license count
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     updated_by = Column(Integer, ForeignKey("users.id"), nullable=True)  # Track who last updated

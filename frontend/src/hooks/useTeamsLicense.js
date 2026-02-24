@@ -8,6 +8,9 @@ const defaults = {
   totalTeams: 0,
   totalAssigned: 0,
   free: 0,
+  perLicenseCost: null,
+  ciplcLicense: 0,
+  cblLicense: 0,
 }
 
 // Fallback to localStorage for backward compatibility
@@ -22,7 +25,17 @@ function loadFromStorage() {
     const free = (!Number.isNaN(f) && f >= 0)
       ? f
       : Math.max(0, totalTeams - totalAssigned)
-    return { totalTeams, totalAssigned, free }
+    const perLicenseCost = data.perLicenseCost != null ? Number(data.perLicenseCost) : null
+    const ciplcLicense = Number(data.ciplcLicense) || 0
+    const cblLicense = Number(data.cblLicense) || 0
+    return {
+      totalTeams,
+      totalAssigned,
+      free,
+      perLicenseCost: (perLicenseCost != null && !Number.isNaN(perLicenseCost)) ? perLicenseCost : null,
+      ciplcLicense,
+      cblLicense,
+    }
   } catch {
     return null
   }
@@ -61,19 +74,23 @@ export function useTeamsLicense() {
       const payload = {
         total_teams: updates.totalTeams ?? 0,
         total_assigned: updates.totalAssigned ?? 0,
-        free: updates.free ?? undefined, // Let backend calculate if not provided
+        free: updates.free ?? undefined,
+        per_license_cost: updates.perLicenseCost !== undefined ? (updates.perLicenseCost === null || updates.perLicenseCost === '' ? null : Number(updates.perLicenseCost)) : undefined,
+        ciplc_license: updates.ciplcLicense !== undefined ? (Number(updates.ciplcLicense) || 0) : undefined,
+        cbl_license: updates.cblLicense !== undefined ? (Number(updates.cblLicense) || 0) : undefined,
       }
       return updateTeamsLicense(payload)
     },
     onSuccess: (data) => {
-      // Invalidate and refetch
       queryClient.invalidateQueries({ queryKey: ['teams_license'] })
-      // Also update localStorage as backup
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify({
           totalTeams: data.total_teams,
           totalAssigned: data.total_assigned,
           free: data.free,
+          perLicenseCost: data.per_license_cost != null ? data.per_license_cost : null,
+          ciplcLicense: data.ciplc_license != null ? data.ciplc_license : 0,
+          cblLicense: data.cbl_license != null ? data.cbl_license : 0,
         }))
       } catch (e) {
         console.warn('Failed to save to localStorage:', e)
@@ -85,12 +102,14 @@ export function useTeamsLicense() {
     },
   })
 
-  // Use API data if available, otherwise fallback to localStorage
   const license = apiLicense
     ? {
         totalTeams: apiLicense.total_teams || 0,
         totalAssigned: apiLicense.total_assigned || 0,
         free: apiLicense.free || 0,
+        perLicenseCost: apiLicense.per_license_cost != null ? apiLicense.per_license_cost : null,
+        ciplcLicense: apiLicense.ciplc_license != null ? apiLicense.ciplc_license : 0,
+        cblLicense: apiLicense.cbl_license != null ? apiLicense.cbl_license : 0,
       }
     : fallbackLicense
 

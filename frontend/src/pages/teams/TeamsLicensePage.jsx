@@ -12,6 +12,9 @@ export default function TeamsLicensePage() {
   const [license, updateLicense, updateMutation] = useTeamsLicense()
   const [totalTeams, setTotalTeams] = useState(String(license.totalTeams))
   const [totalAssigned, setTotalAssigned] = useState(String(license.totalAssigned))
+  const [perLicenseCost, setPerLicenseCost] = useState(license.perLicenseCost != null ? String(license.perLicenseCost) : '')
+  const [ciplcLicense, setCiplcLicense] = useState(String(license.ciplcLicense ?? 0))
+  const [cblLicense, setCblLicense] = useState(String(license.cblLicense ?? 0))
   const [saved, setSaved] = useState(false)
 
   // Auto-calculate free license: Total Teams - Total Assigned
@@ -20,7 +23,10 @@ export default function TeamsLicensePage() {
   useEffect(() => {
     setTotalTeams(String(license.totalTeams))
     setTotalAssigned(String(license.totalAssigned))
-  }, [license.totalTeams, license.totalAssigned])
+    setPerLicenseCost(license.perLicenseCost != null ? String(license.perLicenseCost) : '')
+    setCiplcLicense(String(license.ciplcLicense ?? 0))
+    setCblLicense(String(license.cblLicense ?? 0))
+  }, [license.totalTeams, license.totalAssigned, license.perLicenseCost, license.ciplcLicense, license.cblLicense])
 
   // Handle successful save
   useEffect(() => {
@@ -34,12 +40,17 @@ export default function TeamsLicensePage() {
     e.preventDefault()
     const t = parseInt(totalTeams, 10) || 0
     const a = parseInt(totalAssigned, 10) || 0
-    // Free is auto-calculated: Total - Assigned
     const f = Math.max(0, t - a)
+    const cost = perLicenseCost.trim() === '' ? null : parseFloat(perLicenseCost)
+    const ciplc = parseInt(ciplcLicense, 10) || 0
+    const cbl = parseInt(cblLicense, 10) || 0
     updateLicense({
       totalTeams: t,
       totalAssigned: a,
       free: f,
+      perLicenseCost: cost != null && !Number.isNaN(cost) ? cost : null,
+      ciplcLicense: ciplc,
+      cblLicense: cbl,
     })
   }
 
@@ -115,6 +126,55 @@ export default function TeamsLicensePage() {
             />
             <p className="text-xs text-gray-500 mt-1">
               Formula: Total Teams license ({totalTeams || 0}) − Total assigned license ({totalAssigned || 0}) = {calculatedFree}
+            </p>
+          </div>
+          <div>
+            <label htmlFor="ciplcLicense" className="block text-sm font-medium text-gray-700 mb-1">
+              CIPLC License
+            </label>
+            <input
+              id="ciplcLicense"
+              type="number"
+              min="0"
+              value={ciplcLicense}
+              onChange={(e) => setCiplcLicense(e.target.value)}
+              disabled={!canEdit}
+              className={`w-full border border-gray-300 rounded-md px-3 py-2 ${canEdit ? 'bg-white/80' : 'bg-gray-100 cursor-not-allowed'}`}
+              placeholder="e.g. 0"
+            />
+          </div>
+          <div>
+            <label htmlFor="cblLicense" className="block text-sm font-medium text-gray-700 mb-1">
+              CBL License
+            </label>
+            <input
+              id="cblLicense"
+              type="number"
+              min="0"
+              value={cblLicense}
+              onChange={(e) => setCblLicense(e.target.value)}
+              disabled={!canEdit}
+              className={`w-full border border-gray-300 rounded-md px-3 py-2 ${canEdit ? 'bg-white/80' : 'bg-gray-100 cursor-not-allowed'}`}
+              placeholder="e.g. 0"
+            />
+          </div>
+          <div>
+            <label htmlFor="perLicenseCost" className="block text-sm font-medium text-gray-700 mb-1">
+              Per license cost <span className="text-xs text-gray-500 font-normal">(e.g. per year)</span>
+            </label>
+            <input
+              id="perLicenseCost"
+              type="number"
+              min="0"
+              step="0.01"
+              value={perLicenseCost}
+              onChange={(e) => setPerLicenseCost(e.target.value)}
+              disabled={!canEdit}
+              className={`w-full border border-gray-300 rounded-md px-3 py-2 ${canEdit ? 'bg-white/80' : 'bg-gray-100 cursor-not-allowed'}`}
+              placeholder="e.g. 12.50 (leave empty to hide costs)"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Optional. When set, total costs (count × cost) are shown on the license cards.
             </p>
           </div>
           {canEdit && (

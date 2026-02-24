@@ -46,6 +46,15 @@ export default function TeamsSidebar() {
             </span>
           </NavLink>
         )}
+
+        {(hasPermission('license_entry') || hasPermission('teams_user_list')) && (
+          <NavLink to="/teams/user-list" className={linkClass}>
+            <span className="flex items-center gap-3">
+              <span className="lnr lnr-users"></span>
+              <span>MS Teams User list</span>
+            </span>
+          </NavLink>
+        )}
         
         {hasPermission('upload_activity') && (
           <NavLink to="/teams/upload" className={linkClass}>
@@ -63,6 +72,26 @@ export default function TeamsSidebar() {
               <span>Uploaded Activity Files</span>
             </span>
           </NavLink>
+        )}
+        
+        {hasPermission('employee_list') && (
+          <div className="pt-3 mt-3 border-t border-white/20">
+            <p className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Employee List</p>
+            
+            <NavLink to="/teams/employee/upload" className={linkClass}>
+              <span className="flex items-center gap-3">
+                <span className="lnr lnr-upload"></span>
+                <span>Upload Employee List</span>
+              </span>
+            </NavLink>
+            
+            <NavLink to="/teams/employee/batches" className={linkClass}>
+              <span className="flex items-center gap-3">
+                <span className="lnr lnr-file-empty"></span>
+                <span>Employee List Files</span>
+              </span>
+            </NavLink>
+          </div>
         )}
         
         {(hasPermission('app_activity') || hasPermission('upload_app') || hasPermission('app_batches')) && (

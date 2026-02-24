@@ -3,6 +3,9 @@ import { useQuery } from '@tanstack/react-query'
 import { getWeeklyAnalysis, listFiles, getFileDetail } from '../lib/api'
 import { ResponsiveContainer, ComposedChart, XAxis, YAxis, Tooltip, Legend, Bar, Line, CartesianGrid, LabelList } from 'recharts'
 import DataTable from '../components/DataTable'
+import MultiSelectSearchable from '../components/MultiSelectSearchable'
+import SearchableSelect from '../components/SearchableSelect'
+import { useScopeFilterOptions } from '../hooks/useScopeFilterOptions'
 
 function toWeekLabel(row) {
   if (!row) return ''
@@ -14,13 +17,35 @@ function toWeekLabel(row) {
   return String(row.week || row)
 }
 
-const tabs = [
+// Remove "Mr. " from the start of names (case-insensitive) for display
+function stripMr(name) {
+  if (!name || typeof name !== 'string') return name ? String(name).trim() : ''
+  const s = String(name).trim()
+  if (/^Mr\.\s+/i.test(s)) return s.replace(/^Mr\.\s+/i, '').trim()
+  return s
+}
+
+const ALL_TABS = [
   { key: 'function', label: 'Function', base: 'function' },
   { key: 'company', label: 'Company', base: 'company' },
   { key: 'location', label: 'Location', base: 'location' },
+  { key: 'department', label: 'Department', base: 'function' },
 ]
 
 export default function WeeklyDashboardPage() {
+  const scopeFilter = useScopeFilterOptions()
+  // Use server-side visible_tabs (from /users/me/scope) so role changes apply without re-login
+  // N-2 to N-N: only Department tab, one chart (their department); no function/department selector
+  const visibleTabs = useMemo(() => {
+    if (scopeFilter.isDepartmentOnly) return ALL_TABS.filter(t => t.key === 'department')
+    const keys = scopeFilter.visibleTabKeys || []
+    if (scopeFilter.isLoading && keys.length === 0) return []
+    if (keys.length === 0) return ALL_TABS
+    const visible = ALL_TABS.filter(t => keys.includes(t.key))
+    return visible.length ? visible : ALL_TABS
+  }, [scopeFilter.visibleTabKeys, scopeFilter.isLoading, scopeFilter.isDepartmentOnly])
+  const tabs = visibleTabs
+
   // Load filters from localStorage on mount
   const [active, setActive] = useState(() => {
     const saved = localStorage.getItem('weekly_dashboard_filters')
@@ -58,6 +83,43 @@ export default function WeeklyDashboardPage() {
     }
     return []
   })
+  const [selectedFunctions, setSelectedFunctions] = useState(() => {
+    const saved = localStorage.getItem('weekly_dashboard_filters')
+    if (saved) {
+      try {
+        const filters = JSON.parse(saved)
+        return filters.selectedFunctions || []
+      } catch (e) {
+        return []
+      }
+    }
+    return []
+  })
+  const [selectedDepartments, setSelectedDepartments] = useState(() => {
+    const saved = localStorage.getItem('weekly_dashboard_filters')
+    if (saved) {
+      try {
+        const filters = JSON.parse(saved)
+        return filters.selectedDepartments || []
+      } catch (e) {
+        return []
+      }
+    }
+    return []
+  })
+  // Department tab has its own function filter – independent from Function tab
+  const [selectedFunctionsDepartment, setSelectedFunctionsDepartment] = useState(() => {
+    const saved = localStorage.getItem('weekly_dashboard_filters')
+    if (saved) {
+      try {
+        const filters = JSON.parse(saved)
+        return filters.selectedFunctionsDepartment || []
+      } catch (e) {
+        return []
+      }
+    }
+    return []
+  })
   const [visibleGroups, setVisibleGroups] = useState(5)
   const [showUserWiseModal, setShowUserWiseModal] = useState(false)
   const [selectedGroupForModal, setSelectedGroupForModal] = useState('')
@@ -66,14 +128,28 @@ export default function WeeklyDashboardPage() {
   const groupRefs = useRef({})
   const current = tabs.find(t => t.key === active)
   const baseKey = current?.base || 'function'
-  
+  const useDepartmentBreakdown = active === 'department'
+
+  // If current active tab is not in visible tabs (e.g. permission changed), switch to first visible
+  // N-2 to N-N: force Department tab so they only see their department chart
+  useEffect(() => {
+    const keys = visibleTabs.map(t => t.key)
+    if (keys.length && !keys.includes(active)) {
+      setActive(keys[0])
+    }
+    if (scopeFilter.isDepartmentOnly && active !== 'department') {
+      setActive('department')
+    }
+  }, [active, visibleTabs, scopeFilter.isDepartmentOnly])
+
   const { data: weeklyData = [], isLoading, isError, error } = useQuery({ 
-    queryKey: ['weekly_dashboard', baseKey], 
-    queryFn: () => getWeeklyAnalysis(baseKey),
+    queryKey: ['weekly_dashboard', baseKey, useDepartmentBreakdown ? 'breakdown_department' : null], 
+    queryFn: () => getWeeklyAnalysis(baseKey, useDepartmentBreakdown ? 'department' : null),
     retry: 1,
     staleTime: 5 * 60 * 1000,
     cacheTime: 30 * 60 * 1000,
     refetchOnMount: true,
+    enabled: !scopeFilter.isLoading,
     onError: (error) => {
       console.error('[WeeklyDashboard] API error:', error)
       console.error('[WeeklyDashboard] Error details:', {
@@ -104,16 +180,37 @@ export default function WeeklyDashboardPage() {
   
   const monthNames = ['', 'January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December']
+
+  // Match row group to selected list. Backend returns group as "CIPLC - FunctionName" for function;
+  // dropdown shows "FunctionName", so match by exact equality OR by the part after first " - ".
+  const groupMatches = (rowGroup, selectedList) => {
+    const rGroup = (rowGroup || '').trim()
+    if (!rGroup) return false
+    return selectedList.some(f => {
+      const sel = (f || '').trim()
+      if (sel === rGroup) return true
+      const dashIdx = rGroup.indexOf(' - ')
+      if (dashIdx >= 0) {
+        const afterDash = rGroup.slice(dashIdx + 3).trim()
+        if (afterDash === sel) return true
+      }
+      return false
+    })
+  }
   
   // Set default to latest month if not set (only when data is available)
   useEffect(() => {
-    if (months.length > 0 && !selectedMonth && weeklyData.length > 0) {
-      // Get the latest month (last in sorted array, which is YYYY-MM format)
+    if (months.length > 0 && weeklyData.length > 0) {
       const latestMonth = months[months.length - 1]
-      setSelectedMonth(latestMonth)
+      if (!selectedMonth) {
+        setSelectedMonth(latestMonth)
+      } else if (!months.includes(selectedMonth)) {
+        // Saved month not in current (scoped) data – e.g. N-1 user had different data before; pick first available
+        setSelectedMonth(latestMonth)
+      }
     }
-  }, [months, weeklyData.length]) // Remove selectedMonth from deps to avoid loop
-  
+  }, [months, weeklyData.length]) // Don't depend on selectedMonth to avoid loop
+
   // Get weeks for selected month
   const weeksInMonth = selectedMonth 
     ? Array.from(new Set(weeklyData.filter(r => {
@@ -123,36 +220,180 @@ export default function WeeklyDashboardPage() {
       }).map(r => r.week_in_month).filter(Boolean))).sort()
     : []
   
-  // Filter data by month and weeks (default to latest month)
+  // Function filter: use functions that actually appear in the weekly data so filter and charts match
+  const uniqueFunctions = useMemo(() => {
+    if (weeklyData && weeklyData.length > 0) {
+      const names = new Set()
+      weeklyData.forEach(r => {
+        const g = (r.group || '').trim()
+        if (!g) return
+        const dashIdx = g.indexOf(' - ')
+        const funcPart = dashIdx >= 0 ? g.slice(dashIdx + 3).trim() : g
+        if (funcPart) names.add(funcPart)
+      })
+      return Array.from(names).sort()
+    }
+    const list = scopeFilter.functions || []
+    if (!Array.isArray(list)) return []
+    const names = list.map(f => (f && typeof f === 'object' ? f.name : f)).filter(Boolean)
+    return [...new Set(names)].sort()
+  }, [weeklyData, scopeFilter.functions])
+
+  // On Department tab: when function(s) selected, show departments from weekly data under those functions (so options always match)
+  const uniqueDepartments = useMemo(() => {
+    if (active === 'department' && selectedFunctionsDepartment.length > 0 && weeklyData && weeklyData.length > 0) {
+      const deptSet = new Set()
+      weeklyData.forEach(r => {
+        if (!groupMatches(r.group, selectedFunctionsDepartment)) return
+        const deptStr = (r.department || '').trim()
+        if (!deptStr) return
+        deptStr.split(',').forEach(d => {
+          const name = d.trim()
+          if (name) deptSet.add(name)
+        })
+      })
+      return Array.from(deptSet).sort()
+    }
+    const raw = scopeFilter.departments || []
+    const list = Array.isArray(raw) ? raw : [...raw]
+    let filtered = list
+    if (active === 'department' && selectedFunctionsDepartment.length > 0) {
+      const selSet = new Set(selectedFunctionsDepartment.map(s => (s || '').trim().toLowerCase()))
+      filtered = list.filter(d => {
+        const f = (d && typeof d === 'object' ? d.function : d) || ''
+        const fNorm = String(f).trim().toLowerCase()
+        if (selSet.has(fNorm)) return true
+        return selectedFunctionsDepartment.some(sel => (sel || '').trim().toLowerCase() === fNorm || (fNorm && sel.includes(f)))
+      })
+    }
+    const names = filtered.map(d => (d && typeof d === 'object' ? d.name : d)).filter(Boolean)
+    return [...new Set(names)].sort()
+  }, [scopeFilter.departments, active, selectedFunctionsDepartment, weeklyData])
+
+  // When scoped data loads, clear function/department filters that are not in current options so charts show (e.g. N-1)
+  const funcSet = useMemo(() => new Set(uniqueFunctions), [uniqueFunctions])
+  const deptSet = useMemo(() => new Set(uniqueDepartments), [uniqueDepartments])
+  useEffect(() => {
+    if (weeklyData.length === 0) return
+    setSelectedFunctions(prev => {
+      if (prev.length === 0) return prev
+      if (prev.every(f => funcSet.has(f))) return prev
+      return []
+    })
+    setSelectedFunctionsDepartment(prev => {
+      if (prev.length === 0) return prev
+      if (prev.every(f => funcSet.has(f))) return prev
+      return []
+    })
+    setSelectedDepartments(prev => {
+      if (prev.length === 0) return prev
+      if (prev.every(d => deptSet.has(d))) return prev
+      return []
+    })
+  }, [weeklyData.length, funcSet, deptSet])
+
+  // Filter data by month, weeks; apply function/department filters only for their own tab
   const filteredData = useMemo(() => {
     return weeklyData.filter(r => {
       if (selectedMonth) {
-        // selectedMonth is in YYYY-MM format
         const rMonthKey = `${r.year}-${String(r.month).padStart(2, '0')}`
         if (rMonthKey !== selectedMonth) return false
       }
-      // If weeks are selected, filter by them; otherwise show all weeks
+      if (selectedWeeks.length > 0) {
+        const weekNum = r.week_in_month
+        if (!selectedWeeks.includes(weekNum)) return false
+      }
+      // Function filter: applies on Function tab only (not on Department tab)
+      if (active === 'function' && selectedFunctions.length > 0) {
+        if (!groupMatches(r.group, selectedFunctions)) return false
+      }
+      // Department tab: apply Department tab's function filter and department filter only
+      if (active === 'department') {
+        if (selectedFunctionsDepartment.length > 0 && !groupMatches(r.group, selectedFunctionsDepartment)) return false
+        if (selectedDepartments.length > 0) {
+          if (!r.department) return false
+          const rowDepartments = r.department.split(',').map(d => d.trim())
+          const hasMatchingDept = selectedDepartments.some(selectedDept =>
+            rowDepartments.includes(selectedDept)
+          )
+          if (!hasMatchingDept) return false
+        }
+      }
+      return true
+    })
+  }, [weeklyData, selectedMonth, selectedWeeks, active, selectedFunctions, selectedFunctionsDepartment, selectedDepartments])
+
+  // When Function tab + function selected but no data for selected month: show that function across all months (no department filter)
+  const useFallbackNoMonth = active === 'function' && selectedFunctions.length > 0 && filteredData.length === 0
+  const dataForCharts = useMemo(() => {
+    if (!useFallbackNoMonth) return filteredData
+    return weeklyData.filter(r => {
+      if (!groupMatches(r.group, selectedFunctions)) return false
       if (selectedWeeks.length > 0) {
         const weekNum = r.week_in_month
         if (!selectedWeeks.includes(weekNum)) return false
       }
       return true
     })
-  }, [weeklyData, selectedMonth, selectedWeeks])
+  }, [useFallbackNoMonth, filteredData, weeklyData, selectedFunctions, selectedWeeks])
 
-  // Group data by group (function/company/location)
+  // Group data by group (function/company/location/department)
   const groupedData = useMemo(() => {
     const groups = new Map()
-    for (const row of filteredData) {
-      const groupKey = row.group || 'Unknown'
-      if (!groups.has(groupKey)) {
-        groups.set(groupKey, [])
+    const groupLabels = new Map() // Store display labels for each group key
+    const sourceData = dataForCharts
+
+    for (const row of sourceData) {
+      if (active === 'department') {
+        // Backend may return department-level rows (one row per week+group+department with correct members)
+        const groupName = row.group || 'Unknown'
+        const dept = (row.department || '').trim()
+        if (!dept) continue
+
+        // N-2 to N-N: only show the single department they are part of (scopeFilter.departments); match leniently (exact or substring)
+        if (scopeFilter.isDepartmentOnly && Array.isArray(scopeFilter.departments) && scopeFilter.departments.length > 0) {
+          const deptNorm = dept.toLowerCase()
+          const scopeDeptNames = scopeFilter.departments.map(d => (d && typeof d === 'object' && d.name != null ? d.name : d))
+          const inScope = scopeDeptNames.some(name => {
+            if (!name) return false
+            const scopeNorm = String(name).trim().toLowerCase()
+            return scopeNorm === deptNorm || deptNorm.includes(scopeNorm) || scopeNorm.includes(deptNorm)
+          })
+          if (!inScope) continue
+        }
+        if (selectedDepartments.length > 0 && !selectedDepartments.includes(dept)) continue
+
+        // Display: Company - Department (Function). groupName from backend is "Company - Function"
+        const dashIdx = groupName.indexOf(' - ')
+        const companyPart = dashIdx >= 0 ? groupName.slice(0, dashIdx).trim() : groupName
+        const functionPart = dashIdx >= 0 ? groupName.slice(dashIdx + 3).trim() : ''
+        const groupLabel = functionPart ? `${companyPart} - ${dept} (${functionPart})` : `${companyPart} - ${dept}`
+        const groupKey = `${groupName}|||${dept}`
+
+        if (!groups.has(groupKey)) {
+          groups.set(groupKey, [])
+          groupLabels.set(groupKey, groupLabel)
+        }
+        groups.get(groupKey).push({
+          ...row,
+          weekLabel: toWeekLabel(row),
+          displayGroup: groupLabel
+        })
+      } else {
+        // Group by function/company/location (existing logic)
+        const groupKey = row.group || 'Unknown'
+        if (!groups.has(groupKey)) {
+          groups.set(groupKey, [])
+          groupLabels.set(groupKey, groupKey)
+        }
+        groups.get(groupKey).push({
+          ...row,
+          weekLabel: toWeekLabel(row),
+          displayGroup: groupKey
+        })
       }
-      groups.get(groupKey).push({
-        ...row,
-        weekLabel: toWeekLabel(row)
-      })
     }
+    
     // Sort each group's data by year, month, week
     for (const arr of groups.values()) {
       arr.sort((a, b) => {
@@ -161,10 +402,18 @@ export default function WeeklyDashboardPage() {
         return (a.week_in_month || 0) - (b.week_in_month || 0)
       })
     }
-    return groups
-  }, [filteredData])
+    
+    return { groups, groupLabels }
+  }, [dataForCharts, active, selectedDepartments, scopeFilter.isDepartmentOnly, scopeFilter.departments])
 
-  const allGroups = Array.from(groupedData.keys()).sort()
+  const allGroups = useMemo(() => {
+    if (!groupedData || !groupedData.groups) return []
+    return Array.from(groupedData.groups.keys()).sort((a, b) => {
+      const labelA = groupedData.groupLabels.get(a) || a
+      const labelB = groupedData.groupLabels.get(b) || b
+      return labelA.localeCompare(labelB)
+    })
+  }, [groupedData])
   const displayedGroups = allGroups.slice(0, visibleGroups)
   const hasMoreGroups = visibleGroups < allGroups.length
 
@@ -176,9 +425,22 @@ export default function WeeklyDashboardPage() {
     setVisibleGroups(allGroups.length)
   }
 
+  // Save filters to localStorage
+  useEffect(() => {
+    const filters = {
+      active,
+      selectedMonth,
+      selectedWeeks,
+      selectedFunctions,
+      selectedDepartments,
+      selectedFunctionsDepartment,
+    }
+    localStorage.setItem('weekly_dashboard_filters', JSON.stringify(filters))
+  }, [active, selectedMonth, selectedWeeks, selectedFunctions, selectedDepartments, selectedFunctionsDepartment])
+
   useMemo(() => {
     setVisibleGroups(5)
-  }, [active, selectedMonth, selectedWeeks])
+  }, [active, selectedMonth, selectedWeeks, selectedFunctions, selectedDepartments, selectedFunctionsDepartment])
 
   const palette = ['#60a5fa', '#34d399', '#f472b6', '#a78bfa', '#fbbf24', '#38bdf8']
 
@@ -211,41 +473,94 @@ export default function WeeklyDashboardPage() {
 
   // Helper to get chart data by group
   const getChartData = (group) => {
-    const groupData = groupedData.get(group) || []
+    if (!groupedData || !groupedData.groups) return []
+    const groupData = groupedData.groups.get(group) || []
     return groupData
   }
+  
+  // Helper to get display label for group
+  const getGroupLabel = (group) => {
+    if (!groupedData || !groupedData.groupLabels) return group
+    return groupedData.groupLabels.get(group) || group
+  }
 
-  // Calculate summary statistics for selected weeks (aggregated across all selected weeks)
+  // Rows actually displayed in the charts (same as groupedData.groups values flattened)
+  const dataDisplayedInCharts = useMemo(() => {
+    if (!groupedData || !groupedData.groups) return []
+    return Array.from(groupedData.groups.values()).flat()
+  }, [groupedData])
+
+  // Dedupe only when same (week, group) appears in multiple department groups (function-level data split by dept)
+  // With department breakdown from API, each row is already (week, group, department) - do not dedupe by (week, group)
+  const dataDisplayedInChartsDeduped = useMemo(() => {
+    if (active !== 'department' || dataDisplayedInCharts.length === 0) return dataDisplayedInCharts
+    // Department breakdown: one row per (week, group, department) - no dedupe needed
+    if (useDepartmentBreakdown) return dataDisplayedInCharts
+    const seen = new Set()
+    return dataDisplayedInCharts.filter(r => {
+      const key = `${r.year}-${r.month}-${r.week_in_month}-${r.group}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  }, [active, dataDisplayedInCharts, useDepartmentBreakdown])
+
+  // Pick one reference week so Total Members is not summed across weeks (e.g. 2+2+1+1=6 -> use one week: 2+1=3)
+  const referenceWeekRows = useMemo(() => {
+    const source = dataDisplayedInChartsDeduped.length > 0 ? dataDisplayedInChartsDeduped : dataForCharts
+    if (source.length === 0) return []
+    const weekKeys = source.map(r => ({ y: r.year, m: r.month, w: r.week_in_month }))
+    const latest = weekKeys.reduce((best, curr) => {
+      if (!best) return curr
+      if (curr.y !== best.y) return curr.y > best.y ? curr : best
+      if (curr.m !== best.m) return curr.m > best.m ? curr : best
+      return (curr.w || 0) >= (best.w || 0) ? curr : best
+    }, null)
+    if (!latest) return source
+    return source.filter(r => r.year === latest.y && r.month === latest.m && r.week_in_month === latest.w)
+  }, [dataDisplayedInChartsDeduped, dataForCharts])
+
+  // Calculate summary statistics: Total Members from reference week (headcount); % and hours from full period (all weeks)
   const summaryStats = useMemo(() => {
-    if (filteredData.length === 0) {
+    const refSource = referenceWeekRows.length > 0 ? referenceWeekRows : (dataDisplayedInChartsDeduped.length > 0 ? dataDisplayedInChartsDeduped : dataForCharts)
+    const periodSource = dataDisplayedInChartsDeduped.length > 0 ? dataDisplayedInChartsDeduped : dataForCharts
+    if (refSource.length === 0 && periodSource.length === 0) {
       return {
         totalMembers: 0,
         avgOnTime: 0,
         avgCompletion: 0,
         avgLost: 0,
+        avgLostHours: '0',
         periodLabel: ''
       }
     }
 
-    // Aggregate data across all selected weeks (or all weeks if none selected)
-    const totalMembers = filteredData.reduce((sum, r) => sum + (r.members || 0), 0)
-    const totalOnTimeMembers = filteredData.reduce((sum, r) => sum + (r.members || 0), 0)
-    const weightedOnTime = filteredData.reduce((sum, r) => sum + ((r.on_time_pct || 0) * (r.members || 0)), 0)
-    const avgOnTime = totalOnTimeMembers > 0 ? (weightedOnTime / totalOnTimeMembers).toFixed(2) : 0
+    // Total Members: reference week only (so it's headcount, not sum across weeks)
+    const totalMembers = refSource.reduce((sum, r) => sum + (r.members || 0), 0)
 
-    const weightedCompletion = filteredData.reduce((sum, r) => sum + ((r.completion_pct || 0) * (r.members || 0)), 0)
-    const avgCompletion = totalOnTimeMembers > 0 ? (weightedCompletion / totalOnTimeMembers).toFixed(2) : 0
+    // Period-level averages: use ALL displayed rows so "Avg ... %" reflects the whole period (e.g. All Weeks January 2026)
+    // Avg Work Hour Lost % = total lost hours / total shift hours * 100 (correct for multi-week)
+    const totalPresent = periodSource.reduce((s, r) => s + (r.present || 0), 0)
+    const totalOnTime = periodSource.reduce((s, r) => s + (r.on_time || 0), 0)
+    const avgOnTime = totalPresent > 0 ? ((totalOnTime / totalPresent) * 100).toFixed(2) : 0
 
-    const weightedLost = filteredData.reduce((sum, r) => sum + ((r.lost_pct || 0) * (r.members || 0)), 0)
-    const avgLost = totalOnTimeMembers > 0 ? (weightedLost / totalOnTimeMembers).toFixed(2) : 0
+    const totalDays = periodSource.reduce((s, r) => s + (r.total_days || 0), 0)
+    const totalCompleted = periodSource.reduce((s, r) => s + (r.completed || 0), 0)
+    const avgCompletion = totalDays > 0 ? ((totalCompleted / totalDays) * 100).toFixed(2) : 0
 
-    // Average Work Hour Lost in Hours - weighted by members
-    const weightedLostHours = filteredData.reduce((sum, r) => sum + ((r.lost || 0) * (r.members || 0)), 0)
-    const avgLostHours = totalOnTimeMembers > 0 ? (weightedLostHours / totalOnTimeMembers).toFixed(2) : 0
+    const totalShiftHours = periodSource.reduce((s, r) => s + (Number(r.shift_hours) || 0), 0)
+    const totalLostHours = periodSource.reduce((s, r) => s + (Number(r.lost) || 0), 0)
+    const avgLost = totalShiftHours > 0 ? ((totalLostHours / totalShiftHours) * 100).toFixed(2) : 0
+    // Average lost hours per week (distinct weeks in period)
+    const weekKeys = new Set(periodSource.map(r => `${r.year}-${r.month}-${r.week_in_month ?? r.week}`))
+    const numWeeks = Math.max(1, weekKeys.size)
+    const avgLostHours = (totalLostHours / numWeeks).toFixed(2)
 
-    // Generate period label based on selected weeks
+    // Generate period label (when fallback: no data for selected month, show "All months")
     let periodLabel = ''
-    if (selectedMonth) {
+    if (useFallbackNoMonth) {
+      periodLabel = 'All months (no data for selected month)'
+    } else if (selectedMonth) {
       const [year, monthNum] = selectedMonth.split('-')
       const month = parseInt(monthNum, 10)
       const monthName = monthNames[month] || `Month ${month}`
@@ -275,62 +590,18 @@ export default function WeeklyDashboardPage() {
       avgLostHours,
       periodLabel
     }
-  }, [filteredData, selectedMonth, selectedWeeks])
+  }, [referenceWeekRows, dataDisplayedInChartsDeduped, dataForCharts, useFallbackNoMonth, selectedMonth, selectedWeeks])
 
   const hasAnyData = filteredData.length > 0
 
-  if (allGroups.length === 0 && !isLoading) {
-    return (
-      <div className="space-y-6">
-        {isError && (
-          <div className="card p-4 bg-red-50 border border-red-200">
-            <div className="text-red-800 font-semibold mb-2">Error Loading Data</div>
-            <div className="text-red-600 text-sm">
-              {error?.response?.data?.detail || error?.message || 'Failed to load weekly dashboard data.'}
-              {(error?.message?.includes('timeout') || error?.code === 'ECONNABORTED') && (
-                <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded">
-                  <p className="text-yellow-800 text-xs">
-                    <strong>Timeout Error:</strong> The data is taking longer than expected to process. 
-                    This usually happens with large datasets. The timeout has been increased to 2 minutes. 
-                    Please try refreshing the page, or contact support if the issue persists.
-                  </p>
-                </div>
-              )}
-            </div>
-            <div className="mt-3">
-              <button
-                onClick={() => window.location.reload()}
-                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm"
-              >
-                Retry Loading
-              </button>
-            </div>
-          </div>
-        )}
-        <div className="card p-2 flex gap-2">
-          {tabs.map(t => (
-            <button 
-              key={t.key} 
-              className={`px-3 py-2 rounded-md ${active === t.key ? 'bg-blue-600 text-white' : 'btn-outline'}`} 
-              onClick={() => setActive(t.key)}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-        {!isError && <div className="text-sm text-gray-500">No weekly data for charts.</div>}
-      </div>
-    )
-  }
-
-  if (isLoading && !hasAnyData) {
+  if ((isLoading || scopeFilter.isLoading) && !hasAnyData) {
     return (
       <div className="flex items-center justify-center h-96">
         <div className="text-center max-w-md">
           <div className="mb-4">
             <div className="inline-block animate-spin rounded-full h-16 w-16 border-b-4 border-blue-600"></div>
           </div>
-          <p className="text-gray-600 font-medium mb-2">Loading Weekly Dashboard Data...</p>
+          <p className="text-gray-600 font-medium mb-2">{scopeFilter.isLoading ? 'Loading your access scope...' : 'Loading Weekly Analytics Data...'}</p>
           <p className="text-sm text-gray-500 mt-2 mb-4">Processing weekly attendance data, this may take a minute...</p>
           
           {/* Progress Bar */}
@@ -380,13 +651,13 @@ export default function WeeklyDashboardPage() {
         </div>
       )}
 
-      {/* Loading Indicator for Initial Load */}
-      {isLoading && (
+      {/* Loading Indicator for Initial Load or scope */}
+      {(isLoading || scopeFilter.isLoading) && (
         <div className="card p-6">
           <div className="space-y-4">
             <div className="flex items-center gap-3">
               <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-3 border-blue-600"></div>
-              <p className="text-gray-700 font-medium">Loading weekly dashboard data...</p>
+              <p className="text-gray-700 font-medium">{scopeFilter.isLoading ? 'Loading your access scope...' : 'Loading weekly dashboard data...'}</p>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
               <div className={`flex items-center gap-2 ${!isLoading ? 'text-green-600' : 'text-gray-500'}`}>
@@ -464,7 +735,7 @@ export default function WeeklyDashboardPage() {
             <div>
               <p className="text-sm text-orange-100 mb-1">Avg Work Hour Lost %</p>
               <p className="text-3xl font-bold">{summaryStats.avgLost}%</p>
-              <p className="text-lg font-semibold mt-1 text-orange-50">{summaryStats.avgLostHours} hrs</p>
+              <p className="text-lg font-semibold mt-1 text-orange-50">Avg: {summaryStats.avgLostHours} hrs/week</p>
               {summaryStats.periodLabel && (
                 <p className="text-xs text-orange-100 mt-2 opacity-90">{summaryStats.periodLabel}</p>
               )}
@@ -514,6 +785,44 @@ export default function WeeklyDashboardPage() {
             })}
           </select>
           
+          {active === 'function' && !scopeFilter.isDepartmentOnly && (
+            <MultiSelectSearchable
+              id="function-filter"
+              label="Function"
+              icon="lnr-briefcase"
+              value={selectedFunctions}
+              onChange={setSelectedFunctions}
+              options={uniqueFunctions.map(f => ({ value: f, label: f }))}
+              placeholder="All Functions"
+              className="min-w-[200px]"
+            />
+          )}
+          
+          {active === 'department' && !scopeFilter.isDepartmentOnly && (
+            <>
+              <MultiSelectSearchable
+                id="function-filter-dept-tab"
+                label="Function"
+                icon="lnr-briefcase"
+                value={selectedFunctionsDepartment}
+                onChange={setSelectedFunctionsDepartment}
+                options={uniqueFunctions.map(f => ({ value: f, label: f }))}
+                placeholder="All Functions"
+                className="min-w-[200px]"
+              />
+              <MultiSelectSearchable
+                id="department-filter"
+                label="Department"
+                icon="lnr-layers"
+                value={selectedDepartments}
+                onChange={setSelectedDepartments}
+                options={uniqueDepartments.map(d => ({ value: d, label: d }))}
+                placeholder="All Departments"
+                className="min-w-[200px]"
+              />
+            </>
+          )}
+          
           <label className="text-sm text-gray-600">Week:</label>
           <div className="flex flex-wrap gap-2">
             <button
@@ -562,15 +871,34 @@ export default function WeeklyDashboardPage() {
           </div>
         </div>
       </div>
+
+      {useFallbackNoMonth && (
+        <div className="card p-3 bg-amber-50 border border-amber-200 rounded-lg">
+          <p className="text-sm text-amber-800">
+            No data for the selected month with the chosen function(s). Showing all months for the selected function(s).
+          </p>
+        </div>
+      )}
       
       <div ref={dashboardRef}>
-        {displayedGroups.map((group, groupIdx) => {
+        {allGroups.length === 0 ? (
+          <div className="card p-8 text-center">
+            <p className="text-gray-600 mb-2">No weekly data found for the current filters.</p>
+            <p className="text-sm text-gray-500">Try selecting a month above, or adjust Function / Department filters to see charts.</p>
+            {!scopeFilter.all && weeklyData.length === 0 && (
+              <p className="text-sm text-amber-700 mt-2">
+                The Function and Department dropdowns above show your allowed scope (e.g. Operations). Charts need attendance data that matches that scope. Ensure your Employee Email and data scope are set in User Management, and that uploaded attendance files include the same function/department (e.g. in &quot;Function Name&quot; or &quot;Section Info&quot; columns).
+              </p>
+            )}
+          </div>
+        ) : displayedGroups.map((group, groupIdx) => {
           const chartData = getChartData(group)
           if (chartData.length === 0) return null
+          const groupLabel = getGroupLabel(group)
 
           return (
             <div key={group} ref={el => groupRefs.current[group] = el} className="space-y-4">
-              <h2 className="text-xl font-semibold">{group}</h2>
+              <h2 className="text-xl font-semibold">{groupLabel}</h2>
               
               {/* Row 1: On Time % and Work Hour Completion */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -814,9 +1142,10 @@ function UserWiseModal({ group, month, weeks, groupBy, metric, onClose }) {
     try {
       const date = new Date(dateStr)
       if (isNaN(date.getTime())) return 0
-      const firstDay = new Date(date.getFullYear(), date.getMonth(), 1)
+      // Match backend calculation: week_in_month = ((day - 1) // 7) + 1
+      // Week 1 = days 1-7, Week 2 = days 8-14, Week 3 = days 15-21, Week 4 = days 22-28, Week 5 = days 29-31
       const dayOfMonth = date.getDate()
-      return Math.ceil((dayOfMonth + firstDay.getDay()) / 7)
+      return Math.floor((dayOfMonth - 1) / 7) + 1
     } catch {
       return 0
     }
@@ -900,6 +1229,16 @@ function UserWiseModal({ group, month, weeks, groupBy, metric, onClose }) {
     // Case-insensitive comparison
     return norm1.toLowerCase() === norm2.toLowerCase()
   }
+
+  // Department tab passes group as "Company - Function|||Department" (groupKey from groupedData)
+  const parsedGroup = useMemo(() => {
+    if (!group || typeof group !== 'string') return { groupPart: group, departmentPart: null }
+    if (group.includes('|||')) {
+      const [groupPart, departmentPart] = group.split('|||').map(s => s.trim())
+      return { groupPart: groupPart || null, departmentPart: departmentPart || null }
+    }
+    return { groupPart: group, departmentPart: null }
+  }, [group])
 
   // Fetch and calculate user-wise data
   useEffect(() => {
@@ -991,9 +1330,12 @@ function UserWiseModal({ group, month, weeks, groupBy, metric, onClose }) {
           const rowGroup = getGroupValue(r)
 
           // Filter by group, month, and weeks (normalize for comparison)
-          if (group) {
-            if (!groupsMatch(rowGroup, group)) {
-              continue
+          if (parsedGroup.groupPart) {
+            if (!groupsMatch(rowGroup, parsedGroup.groupPart)) continue
+            // Department-level chart: also filter by department (group is "Company - Function|||Department")
+            if (parsedGroup.departmentPart) {
+              const rowDept = String(r['Department Name'] || r['Department'] || '').trim()
+              if (!rowDept || rowDept.toLowerCase() !== parsedGroup.departmentPart.toLowerCase()) continue
             }
           }
           if (month && rowMonth !== month) continue
@@ -1002,7 +1344,7 @@ function UserWiseModal({ group, month, weeks, groupBy, metric, onClose }) {
           matchedRows++
 
           const empCode = String(r['Employee Code'] || '').trim()
-          const empName = String(r['Name'] || '').trim()
+          const empName = stripMr(String(r['Name'] || ''))
           const userKey = empCode || empName
 
           if (!userKey) continue
@@ -1092,28 +1434,20 @@ function UserWiseModal({ group, month, weeks, groupBy, metric, onClose }) {
               }
             }
           } else if (metric === 'work_hour_lost') {
-            // Backend processes ALL rows (except W and H), but only calculates lost hours for P/OD/blank
-            // Other flags (A, L, etc.) still contribute to shift/work hours but not lost hours
+            // Only count P (Present) and OD (On Duty). Skip W, H, EL, A, L, etc.
             const flagStr = String(flag).trim()
-            
-            // Skip weekends and holidays (Flag="W" or "H") for work hour lost calculations
-            // This matches backend: if flag == "W" or flag == "H": continue
-            if (flagStr === 'W' || flagStr === 'H') continue
-            
+            if (flagStr !== 'P' && flagStr !== 'OD') continue
+
             const shiftInStr = String(r['Shift In Time'] || '').trim()
             const shiftOutStr = String(r['Shift Out Time'] || '').trim()
             const inTimeStr = String(r['In Time'] || '').trim()
             const outTimeStr = String(r['Out Time'] || '').trim()
 
-            // Calculate lost hours per day (matching backend logic exactly)
-            // Backend uses _compute_duration_hours which handles overnight shifts
             const computeDurationHours = (startStr, endStr) => {
               if (!startStr || !endStr) return 0.0
               const startH = timeToHours(startStr)
               const endH = timeToHours(endStr)
               if (startH === 0.0 || endH === 0.0) return 0.0
-              // Handle overnight shifts (e.g., 22:00 to 06:00)
-              // If end time is earlier than start time, it's an overnight shift
               const finalEndH = endH < startH ? endH + 24.0 : endH
               return Math.max(0, finalEndH - startH)
             }
@@ -1121,46 +1455,17 @@ function UserWiseModal({ group, month, weeks, groupBy, metric, onClose }) {
             const shiftHrs = computeDurationHours(shiftInStr, shiftOutStr)
             const workHrs = computeDurationHours(inTimeStr, outTimeStr)
 
-            // Calculate lost hours per person per day: if shift is 9h and work is 8h, lost = 1h
-            // This matches backend logic in work_hour_lost.py lines 173-200
-            // Backend: if shift_hrs > 0: (processes all rows with shift hours, regardless of flag)
             if (shiftHrs > 0) {
               const shiftHrsRounded = Number(shiftHrs.toFixed(2))
               const workHrsRounded = Number(workHrs.toFixed(2))
 
-              // Always add shift and work hours for ALL flags (matching backend)
-              // Backend: shift_hours_sum[key] += shift_hrs and work_hours_sum[key] += work_hrs
               data.shiftHoursSum = (data.shiftHoursSum || 0) + shiftHrsRounded
               data.workHoursSum = (data.workHoursSum || 0) + workHrsRounded
 
-              // Lost-hour business rule (matching backend exactly):
-              // We count loss ONLY for Present, OD, and blank-flag days.
-              // - P/OD/blank + work > 0    → partial loss = shift - work (clamped at 0)
-              // - P/OD/blank + work == 0   → full shift lost
-              // - others (A, L, etc.) → no loss (but still counted in shift/work hours above)
-              const countableFlags = ['P', 'OD', '']
-              let lostHrs = 0.0
-              if (countableFlags.includes(flagStr)) {
-                if (workHrsRounded > 0) {
-                  // Partial loss: shift - work (clamped at 0)
-                  // If work > shift on this day, lost = 0 (correct per-day calculation)
-                  // This is why total work > total shift can still have lost hours:
-                  // Day 1: shift 8h, work 9h → lost 0h
-                  // Day 2: shift 8h, work 7h → lost 1h
-                  // Total: shift 16h, work 16h, lost 1h
-                  lostHrs = Math.max(0.0, shiftHrsRounded - workHrsRounded)
-                } else {
-                  // Present/OD/blank but no in/out → full shift lost
-                  lostHrs = shiftHrsRounded
-                }
-              } else {
-                // Other flags (A, L, W, H, etc.) → no loss
-                // But shift/work hours were already added above
-                lostHrs = 0.0
-              }
-              
-              lostHrs = Number(lostHrs.toFixed(2))
-              data.lostHoursSum = (data.lostHoursSum || 0) + lostHrs
+              const lostHrs = workHrsRounded > 0
+                ? Math.max(0.0, shiftHrsRounded - workHrsRounded)
+                : shiftHrsRounded
+              data.lostHoursSum = (data.lostHoursSum || 0) + Number(lostHrs.toFixed(2))
             }
           }
         }
@@ -1201,6 +1506,10 @@ function UserWiseModal({ group, month, weeks, groupBy, metric, onClose }) {
             const lostPct = totalShiftHours > 0
               ? ((totalLostHours / totalShiftHours) * 100).toFixed(2)
               : '0.00'
+            
+            // Actual Overtime = sum(work hours) - sum(shift hours) - sum(lost hours), min 0
+            const actualOvertime = Math.max(0, totalWorkHours - totalShiftHours - totalLostHours)
+            
             results.push({
               user: data.user,
               company: data.company,
@@ -1210,6 +1519,7 @@ function UserWiseModal({ group, month, weeks, groupBy, metric, onClose }) {
               workHours: totalWorkHours.toFixed(2),
               lostHours: totalLostHours.toFixed(2),
               lostPct: `${lostPct}%`,
+              actualOvertime: actualOvertime.toFixed(2),
             })
           }
         }
@@ -1217,7 +1527,35 @@ function UserWiseModal({ group, month, weeks, groupBy, metric, onClose }) {
         console.log('[UserWiseModal] Matched rows:', matchedRows, 'out of', totalRows)
         console.log('[UserWiseModal] User data results:', results.length)
         
-        setUserData(results.sort((a, b) => a.user.localeCompare(b.user)))
+        // Sort based on metric type
+        let sortedResults = results
+        if (metric === 'on_time') {
+          // On Time %: lowest to highest
+          sortedResults = results.sort((a, b) => {
+            const aPct = parseFloat(a.onTimePct.replace('%', '')) || 0
+            const bPct = parseFloat(b.onTimePct.replace('%', '')) || 0
+            return aPct - bPct
+          })
+        } else if (metric === 'work_hour') {
+          // Work hours completed: lowest to highest (by completion %)
+          sortedResults = results.sort((a, b) => {
+            const aPct = parseFloat(a.completionPct.replace('%', '')) || 0
+            const bPct = parseFloat(b.completionPct.replace('%', '')) || 0
+            return aPct - bPct
+          })
+        } else if (metric === 'work_hour_lost') {
+          // Work hour lost: highest to lowest (by lost hours)
+          sortedResults = results.sort((a, b) => {
+            const aLost = parseFloat(a.lostHours) || 0
+            const bLost = parseFloat(b.lostHours) || 0
+            return bLost - aLost
+          })
+        } else {
+          // Default: sort by user name
+          sortedResults = results.sort((a, b) => a.user.localeCompare(b.user))
+        }
+        
+        setUserData(sortedResults)
       } catch (error) {
         console.error('Error fetching user-wise data:', error)
         setUserData([])
@@ -1264,6 +1602,7 @@ function UserWiseModal({ group, month, weeks, groupBy, metric, onClose }) {
         { key: 'workHours', label: 'Work Hours' },
         { key: 'lostHours', label: 'Lost Hours' },
         { key: 'lostPct', label: 'Lost %' },
+        { key: 'actualOvertime', label: 'Actual Overtime' },
       ]
     }
     return []
@@ -1285,7 +1624,7 @@ function UserWiseModal({ group, month, weeks, groupBy, metric, onClose }) {
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-white rounded-lg shadow-xl max-w-6xl w-full max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-white rounded-lg shadow-xl max-w-[95vw] w-full max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
         <div className="p-6 border-b border-gray-200 flex items-center justify-between">
           <div>
             <h3 className="text-xl font-bold text-gray-900">User-wise {metricLabels[metric] || 'On Time %'}</h3>

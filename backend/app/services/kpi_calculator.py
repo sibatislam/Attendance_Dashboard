@@ -285,10 +285,12 @@ def _calculate_work_hour_lost_kpi(db: Session, file_id: int, group_by: str, rows
         member_id = emp_code or emp_name
         flag = str(r.get("Flag", "")).strip()
         
-        # Skip weekends and holidays (Flag="W" or "H") for work hour lost calculations
+        # Skip weekends and holidays (Flag="W" or "H"). Only count P and OD for work hour lost.
         if flag == "W" or flag == "H":
             continue
-        
+        if flag != "P" and flag != "OD":
+            continue
+
         key = (month, group_val)
         if member_id:
             members[key].add(member_id)
@@ -296,7 +298,7 @@ def _calculate_work_hour_lost_kpi(db: Session, file_id: int, group_by: str, rows
             present_count[key] += 1
         if flag == "OD":
             od_count[key] += 1
-        
+
         shift_hrs = _compute_duration_hours(
             str(r.get("Shift In Time", "")).strip(),
             str(r.get("Shift Out Time", "")).strip()
@@ -305,22 +307,18 @@ def _calculate_work_hour_lost_kpi(db: Session, file_id: int, group_by: str, rows
             str(r.get("In Time", "")).strip(),
             str(r.get("Out Time", "")).strip()
         )
-        
+
         if shift_hrs > 0:
             shift_hrs = round(shift_hrs, 2)
             work_hrs = round(work_hrs, 2)
             shift_hours_sum[key] += shift_hrs
             work_hours_sum[key] += work_hrs
-            
-            countable_flags = ("P", "OD", "")
-            if flag in countable_flags:
-                if work_hrs > 0:
-                    lost_hrs = max(0.0, shift_hrs - work_hrs)
-                else:
-                    lost_hrs = shift_hrs
+
+            if work_hrs > 0:
+                lost_hrs = max(0.0, shift_hrs - work_hrs)
             else:
-                lost_hrs = 0.0
-            
+                lost_hrs = shift_hrs
+
             lost_hrs = round(lost_hrs, 2)
             lost_hours_sum[key] += lost_hrs
     

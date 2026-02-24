@@ -7,6 +7,8 @@ import { getLeaveAnalysis } from '../lib/api'
 import { ResponsiveContainer, ComposedChart, XAxis, YAxis, Tooltip, Legend, Bar, Line, CartesianGrid, LabelList } from 'recharts'
 import html2canvas from 'html2canvas'
 import jsPDF from 'jspdf'
+import { useScopeFilterOptions } from '../hooks/useScopeFilterOptions'
+import MultiSelectSearchable from '../components/MultiSelectSearchable'
 
 function toMonthLabel(m) {
   if (!m) return ''
@@ -18,15 +20,43 @@ function toMonthLabel(m) {
   return `${names[month-1]} ${year}`
 }
 
-const tabs = [
-  { key: 'function', label: 'Function', base: 'function' },
+const ALL_TABS = [
   { key: 'company', label: 'Company', base: 'company' },
+  { key: 'function', label: 'Function', base: 'function' },
   { key: 'location', label: 'Location', base: 'location' },
 ]
 
 export default function DashboardPage() {
   const queryClient = useQueryClient()
-  const [active, setActive] = useState('function')
+  const scopeFilter = useScopeFilterOptions()
+  const visibleTabs = useMemo(() => {
+    const keys = scopeFilter.visibleTabKeysDashboard || []
+    if (scopeFilter.isLoading && keys.length === 0) return []
+    if (keys.length === 0) return ALL_TABS
+    const visible = ALL_TABS.filter(t => keys.includes(t.key))
+    return visible.length ? visible : ALL_TABS
+  }, [scopeFilter.visibleTabKeysDashboard, scopeFilter.isLoading])
+  const tabs = visibleTabs
+  const [active, setActive] = useState(() => {
+    const saved = localStorage.getItem('dashboard_filters')
+    if (saved) {
+      try {
+        const filters = JSON.parse(saved)
+        return filters.active || visibleTabs[0]?.key || 'company'
+      } catch (e) {
+        return visibleTabs[0]?.key || 'company'
+      }
+    }
+    return visibleTabs[0]?.key || 'company'
+  })
+  
+  // If current active tab is not in visible tabs (e.g. permission changed), switch to first visible
+  useEffect(() => {
+    const keys = visibleTabs.map(t => t.key)
+    if (keys.length && !keys.includes(active)) {
+      setActive(keys[0])
+    }
+  }, [active, visibleTabs])
   const [isExporting, setIsExporting] = useState(false)
   const [exportProgress, setExportProgress] = useState({ current: 0, total: 0 })
   // Load filters from localStorage on mount, or initialize with empty
@@ -55,6 +85,9 @@ export default function DashboardPage() {
     return ''
   })
   const [visibleGroups, setVisibleGroups] = useState(5) // Show 5 groups initially
+  const [selectedCompanyFilters, setSelectedCompanyFilters] = useState([])
+  const [selectedFunctionFilters, setSelectedFunctionFilters] = useState([])
+  const [selectedLocationFilters, setSelectedLocationFilters] = useState([])
   const dashboardRef = useRef(null)
   const groupRefs = useRef({})
   const current = tabs.find(t => t.key === active)
@@ -275,20 +308,20 @@ export default function DashboardPage() {
   }, [filterDataByMonth]) // Depend on filterDataByMonth instead of fromM/toM directly
 
   const exportToPDF = async () => {
-    if (allGroups.length === 0) return
+    if (filteredGroups.length === 0) return
     
     setIsExporting(true)
-    setExportProgress({ current: 0, total: allGroups.length })
+    setExportProgress({ current: 0, total: filteredGroups.length })
     
     try {
       const pdf = new jsPDF('landscape', 'mm', 'a4')
       const pdfWidth = pdf.internal.pageSize.getWidth()
       
-      for (let i = 0; i < allGroups.length; i++) {
-        const group = allGroups[i]
+      for (let i = 0; i < filteredGroups.length; i++) {
+        const group = filteredGroups[i]
         const groupElement = groupRefs.current[group]
         if (!groupElement) {
-          setExportProgress({ current: i + 1, total: allGroups.length })
+          setExportProgress({ current: i + 1, total: filteredGroups.length })
           continue
         }
         
@@ -308,10 +341,10 @@ export default function DashboardPage() {
         if (i > 0) pdf.addPage()
         pdf.addImage(imgData, 'JPEG', 10, 10, imgWidth, imgHeight)
         
-        setExportProgress({ current: i + 1, total: allGroups.length })
+        setExportProgress({ current: i + 1, total: filteredGroups.length })
       }
       
-      const tabLabel = current?.label || 'function'
+      const tabLabel = current?.label || 'company'
       const dateStr = new Date().toISOString().split('T')[0]
       pdf.save(`Dashboard_${tabLabel}_${dateStr}.pdf`)
     } catch (error) {
@@ -323,7 +356,7 @@ export default function DashboardPage() {
     }
   }
 
-  // Get unique groups from filtered data
+  // Get unique groups from filtered data (for current tab's baseKey)
   const allGroups = useMemo(() => {
     const groups = new Set()
     const filteredOnTime = filterDataByMonth(onTimeData)
@@ -338,10 +371,27 @@ export default function DashboardPage() {
     return Array.from(groups).sort()
   }, [onTimeData, workHourData, workHourLostData, leaveAnalysisData, filterDataByMonth])
 
+  // Apply tab-specific filter (company / function / location); allow multiple selection
+  const filteredGroups = useMemo(() => {
+    if (active === 'company' && selectedCompanyFilters.length > 0) {
+      const set = new Set(selectedCompanyFilters)
+      return allGroups.filter(g => set.has(g))
+    }
+    if (active === 'function' && selectedFunctionFilters.length > 0) {
+      const set = new Set(selectedFunctionFilters)
+      return allGroups.filter(g => set.has(g))
+    }
+    if (active === 'location' && selectedLocationFilters.length > 0) {
+      const set = new Set(selectedLocationFilters)
+      return allGroups.filter(g => set.has(g))
+    }
+    return allGroups
+  }, [active, allGroups, selectedCompanyFilters, selectedFunctionFilters, selectedLocationFilters])
+
   // Get only visible groups for rendering (lazy loading for performance)
   const displayedGroups = useMemo(() => {
-    return allGroups.slice(0, visibleGroups)
-  }, [allGroups, visibleGroups])
+    return filteredGroups.slice(0, visibleGroups)
+  }, [filteredGroups, visibleGroups])
 
   // Memoize chart data for all displayed groups to prevent unnecessary re-renders
   const chartDataCache = useMemo(() => {
@@ -357,20 +407,20 @@ export default function DashboardPage() {
     return cache
   }, [displayedGroups, onTimeData, workHourData, workHourLostData, leaveAnalysisData, getChartData])
 
-  const hasMoreGroups = visibleGroups < allGroups.length
+  const hasMoreGroups = visibleGroups < filteredGroups.length
 
   const loadMoreGroups = () => {
-    setVisibleGroups(prev => Math.min(prev + 5, allGroups.length))
+    setVisibleGroups(prev => Math.min(prev + 5, filteredGroups.length))
   }
 
   const showAllGroups = () => {
-    setVisibleGroups(allGroups.length)
+    setVisibleGroups(filteredGroups.length)
   }
 
-  // Reset visible groups when tab changes
-  useMemo(() => {
+  // Reset visible groups when tab or tab filter changes
+  useEffect(() => {
     setVisibleGroups(5)
-  }, [active])
+  }, [active, selectedCompanyFilters, selectedFunctionFilters, selectedLocationFilters])
 
   const palette = ['#60a5fa', '#34d399', '#f472b6', '#a78bfa', '#fbbf24', '#38bdf8']
 
@@ -418,18 +468,17 @@ export default function DashboardPage() {
     return <text x={x} y={y - 8} fill="#000000" fontSize={12} fontWeight="700" textAnchor="middle" dominantBaseline="bottom">{value}%</text>
   }, [])
 
-  // Calculate summary statistics
+  // Calculate summary statistics over the filtered date range (period averages, not just last month)
   const summaryStats = useMemo(() => {
     const filteredOnTime = filterDataByMonth(onTimeData)
     const filteredWorkHour = filterDataByMonth(workHourData)
     const filteredWorkHourLost = filterDataByMonth(workHourLostData)
     
-    // Get the latest month from the data
     const datasetToUse = filteredOnTime.length > 0 ? filteredOnTime : 
                          filteredWorkHour.length > 0 ? filteredWorkHour : 
                          filteredWorkHourLost
     
-    // Find the latest month in the dataset
+    // Latest month in range (for Total Members snapshot and fallback label)
     let latestMonth = null
     datasetToUse.forEach(r => {
       if (!latestMonth || r.month > latestMonth) {
@@ -437,50 +486,58 @@ export default function DashboardPage() {
       }
     })
     
-    // Sum members from all groups in the latest month only
+    // Total Members: snapshot from last month in the filtered range
     const totalMembers = datasetToUse
       .filter(r => r.month === latestMonth)
       .reduce((sum, r) => sum + (r.members || 0), 0)
     
-    // Average On Time % - Latest month only, weighted by members
-    const latestOnTime = filteredOnTime.filter(r => r.month === latestMonth)
-    const totalOnTimeMembers = latestOnTime.reduce((sum, r) => sum + (r.members || 0), 0)
-    const weightedOnTime = latestOnTime.reduce((sum, r) => sum + ((r.on_time_pct || 0) * (r.members || 0)), 0)
+    // Avg On Time % - weighted average over ALL months in the filtered range
+    const totalOnTimeMembers = filteredOnTime.reduce((sum, r) => sum + (r.members || 0), 0)
+    const weightedOnTime = filteredOnTime.reduce((sum, r) => sum + ((r.on_time_pct || 0) * (r.members || 0)), 0)
     const avgOnTime = totalOnTimeMembers > 0 
       ? (weightedOnTime / totalOnTimeMembers).toFixed(2)
       : 0
     
-    // Average Work Hour Completion % - Latest month only, weighted by members
-    const latestWorkHour = filteredWorkHour.filter(r => r.month === latestMonth)
-    const totalWorkHourMembers = latestWorkHour.reduce((sum, r) => sum + (r.members || 0), 0)
-    const weightedCompletion = latestWorkHour.reduce((sum, r) => sum + ((r.completion_pct || 0) * (r.members || 0)), 0)
+    // Avg Work Hour Completion % - weighted average over filtered range
+    const totalWorkHourMembers = filteredWorkHour.reduce((sum, r) => sum + (r.members || 0), 0)
+    const weightedCompletion = filteredWorkHour.reduce((sum, r) => sum + ((r.completion_pct || 0) * (r.members || 0)), 0)
     const avgCompletion = totalWorkHourMembers > 0
       ? (weightedCompletion / totalWorkHourMembers).toFixed(2)
       : 0
     
-    // Average Work Hour Lost % - Latest month only, weighted by members
-    const latestWorkHourLost = filteredWorkHourLost.filter(r => r.month === latestMonth)
-    const totalLostMembers = latestWorkHourLost.reduce((sum, r) => sum + (r.members || 0), 0)
-    const weightedLost = latestWorkHourLost.reduce((sum, r) => sum + ((r.lost_pct || 0) * (r.members || 0)), 0)
-    const avgLost = totalLostMembers > 0
-      ? (weightedLost / totalLostMembers).toFixed(2)
+    // Avg Work Hour Lost % - period total: (total lost hours / total shift hours) * 100 over filtered range
+    const totalShiftHours = filteredWorkHourLost.reduce((sum, r) => sum + (Number(r.shift_hours) || 0), 0)
+    const totalLostHours = filteredWorkHourLost.reduce((sum, r) => sum + (Number(r.lost) || 0), 0)
+    const avgLost = totalShiftHours > 0
+      ? ((totalLostHours / totalShiftHours) * 100).toFixed(2)
       : 0
     
-    // Average Work Hour Lost in Hours - Latest month only, weighted by members
-    const weightedLostHours = latestWorkHourLost.reduce((sum, r) => sum + ((r.lost || 0) * (r.members || 0)), 0)
-    const avgLostHours = totalLostMembers > 0
-      ? (weightedLostHours / totalLostMembers).toFixed(2)
-      : 0
+    // Average lost hours per group over the filtered range (group = function, company, or location depending on active tab)
+    const uniqueGroups = new Set(filteredWorkHourLost.map(r => r.group).filter(Boolean))
+    const numGroups = Math.max(1, uniqueGroups.size)
+    const avgLostHours = (totalLostHours / numGroups).toFixed(2)
+    const avgLostHoursPerLabel = active === 'company' ? 'company' : active === 'location' ? 'location' : 'function'
+    
+    // Period label: show date range when filter is set, otherwise latest month
+    let periodLabel = latestMonth ? toMonthLabel(latestMonth) : ''
+    if (fromM && toM) {
+      periodLabel = `${toMonthLabel(fromM)} – ${toMonthLabel(toM)}`
+    } else if (fromM) {
+      periodLabel = `${toMonthLabel(fromM)} – ${latestMonth ? toMonthLabel(latestMonth) : ''}`.replace(/ – $/, '')
+    } else if (toM) {
+      periodLabel = latestMonth ? toMonthLabel(latestMonth) : toMonthLabel(toM)
+    }
     
     return {
-      totalMembers: totalMembers,
+      totalMembers,
       avgOnTime,
       avgCompletion,
       avgLost,
       avgLostHours,
-      latestMonth: latestMonth ? toMonthLabel(latestMonth) : ''
+      avgLostHoursPerLabel,
+      latestMonth: periodLabel
     }
-  }, [onTimeData, workHourData, workHourLostData, filterDataByMonth])
+  }, [onTimeData, workHourData, workHourLostData, filterDataByMonth, fromM, toM, active])
 
   // Debug: Log user permissions and data status
   useEffect(() => {
@@ -530,17 +587,21 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
-      <div className="card p-2 flex gap-2">
+      <div className="card p-6 bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200 shadow-lg">
+        <div className="flex gap-2">
           {tabs.map(t => (
-            <button 
-              key={t.key} 
-              className={`px-3 py-2 rounded-md ${active === t.key ? 'bg-blue-600 text-white' : 'btn-outline'}`} 
+            <button
+              key={t.key}
+              className={`px-4 py-2.5 rounded-md text-sm font-medium border-2 transition-all ${
+                active === t.key ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:border-blue-400'
+              }`}
               onClick={() => setActive(t.key)}
             >
               {t.label}
             </button>
           ))}
         </div>
+      </div>
       </div>
     )
   }
@@ -702,7 +763,7 @@ export default function DashboardPage() {
             <div>
               <p className="text-sm text-orange-100 mb-1">Avg Work Hour Lost %</p>
               <p className="text-3xl font-bold">{summaryStats.avgLost}%</p>
-              <p className="text-lg font-semibold mt-1 text-orange-50">{summaryStats.avgLostHours} hrs</p>
+              <p className="text-lg font-semibold mt-1 text-orange-50">Avg: {summaryStats.avgLostHours} hrs / {summaryStats.avgLostHoursPerLabel}</p>
               {summaryStats.latestMonth && (
                 <p className="text-xs text-orange-100 mt-2 opacity-90">{summaryStats.latestMonth}</p>
               )}
@@ -714,42 +775,114 @@ export default function DashboardPage() {
         </div>
       </div>
       
-      <div className="card p-2">
-        <div className="flex gap-2 items-center justify-between mb-3">
+      <div className="card p-6 bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200 shadow-lg space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-blue-200">
           <div className="flex gap-2">
             {tabs.map(t => (
-              <button 
-                key={t.key} 
-                className={`px-3 py-2 rounded-md ${active === t.key ? 'bg-blue-600 text-white' : 'btn-outline'}`} 
+              <button
+                key={t.key}
+                className={`px-4 py-2.5 rounded-md text-sm font-medium border-2 transition-all ${
+                  active === t.key
+                    ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                    : 'bg-white text-gray-700 border-gray-300 hover:border-blue-400 hover:bg-blue-50'
+                }`}
                 onClick={() => setActive(t.key)}
               >
                 {t.label}
               </button>
             ))}
           </div>
-          <button 
+          <button
             onClick={exportToPDF}
             disabled={isExporting}
-            className="btn"
+            className="px-4 py-2.5 rounded-md text-sm font-medium bg-blue-600 text-white border-2 border-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
           >
             {isExporting ? 'Exporting...' : 'Export as PDF'}
           </button>
         </div>
-        
-        {allMonths.length > 0 && (
-          <div className="flex items-center gap-3">
-            <label className="text-sm text-gray-600">From</label>
-            <select className="btn-outline" value={fromM || ''} onChange={e => setFromM(e.target.value)}>
-              <option value="">(min)</option>
-              {allMonths.map(m => <option key={m} value={m}>{toMonthLabel(m)}</option>)}
-            </select>
-            <label className="text-sm text-gray-600">To</label>
-            <select className="btn-outline" value={toM || ''} onChange={e => setToM(e.target.value)}>
-              <option value="">(max)</option>
-              {allMonths.map(m => <option key={m} value={m}>{toMonthLabel(m)}</option>)}
-            </select>
-          </div>
-        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {allMonths.length > 0 && (
+            <>
+              <div className="bg-white rounded-lg p-3 border-2 border-blue-300 shadow-sm">
+                <label htmlFor="dashboard-from-month" className="block text-sm font-semibold text-gray-800 mb-2 flex items-center gap-2">
+                  <span className="lnr lnr-calendar-full text-blue-600"></span>
+                  From
+                </label>
+                <select
+                  id="dashboard-from-month"
+                  className="w-full px-4 py-2.5 border-2 border-gray-300 rounded-md bg-white text-gray-900 font-medium focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all shadow-sm hover:border-blue-400"
+                  value={fromM || ''}
+                  onChange={e => setFromM(e.target.value)}
+                >
+                  <option value="">(min)</option>
+                  {allMonths.map(m => (
+                    <option key={m} value={m}>{toMonthLabel(m)}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="bg-white rounded-lg p-3 border-2 border-blue-300 shadow-sm">
+                <label htmlFor="dashboard-to-month" className="block text-sm font-semibold text-gray-800 mb-2 flex items-center gap-2">
+                  <span className="lnr lnr-calendar-full text-blue-600"></span>
+                  To
+                </label>
+                <select
+                  id="dashboard-to-month"
+                  className="w-full px-4 py-2.5 border-2 border-gray-300 rounded-md bg-white text-gray-900 font-medium focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all shadow-sm hover:border-blue-400"
+                  value={toM || ''}
+                  onChange={e => setToM(e.target.value)}
+                >
+                  <option value="">(max)</option>
+                  {allMonths.map(m => (
+                    <option key={m} value={m}>{toMonthLabel(m)}</option>
+                  ))}
+                </select>
+              </div>
+            </>
+          )}
+          {active === 'company' && allGroups.length > 0 && (
+            <div className="bg-white rounded-lg p-3 border-2 border-blue-300 shadow-sm">
+              <MultiSelectSearchable
+                id="dashboard-company-filter"
+                label="Company"
+                icon="lnr-apartment"
+                value={selectedCompanyFilters}
+                onChange={setSelectedCompanyFilters}
+                options={allGroups.map(g => ({ value: g, label: g }))}
+                placeholder="All Companies"
+                showSelectAll={true}
+              />
+            </div>
+          )}
+          {active === 'function' && allGroups.length > 0 && (
+            <div className="bg-white rounded-lg p-3 border-2 border-blue-300 shadow-sm">
+              <MultiSelectSearchable
+                id="dashboard-function-filter"
+                label="Function"
+                icon="lnr-briefcase"
+                value={selectedFunctionFilters}
+                onChange={setSelectedFunctionFilters}
+                options={allGroups.map(g => ({ value: g, label: g }))}
+                placeholder="All Functions"
+                showSelectAll={true}
+              />
+            </div>
+          )}
+          {active === 'location' && allGroups.length > 0 && (
+            <div className="bg-white rounded-lg p-3 border-2 border-blue-300 shadow-sm">
+              <MultiSelectSearchable
+                id="dashboard-location-filter"
+                label="Location"
+                icon="lnr-map-marker"
+                value={selectedLocationFilters}
+                onChange={setSelectedLocationFilters}
+                options={allGroups.map(g => ({ value: g, label: g }))}
+                placeholder="All Locations"
+                showSelectAll={true}
+              />
+            </div>
+          )}
+        </div>
       </div>
       
       <div ref={dashboardRef}>
@@ -981,21 +1114,28 @@ export default function DashboardPage() {
             className="px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-lg hover:from-blue-700 hover:to-indigo-700 shadow-lg transform transition-all hover:scale-105 font-medium flex items-center gap-2"
           >
             <span className="lnr lnr-chevron-down"></span>
-            Load More ({allGroups.length - visibleGroups} remaining)
+            Load More ({filteredGroups.length - visibleGroups} remaining)
           </button>
           <button
             onClick={showAllGroups}
             className="px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-lg hover:from-green-700 hover:to-emerald-700 shadow-lg transform transition-all hover:scale-105 font-medium flex items-center gap-2"
           >
             <span className="lnr lnr-layers"></span>
-            Show All ({allGroups.length} groups)
+            Show All ({filteredGroups.length} groups)
           </button>
         </div>
       )}
 
-      {!hasMoreGroups && allGroups.length > 5 && (
+      {!hasMoreGroups && filteredGroups.length > 5 && (
         <div className="text-center text-gray-500 mt-8 mb-8">
-          <p className="text-sm">Showing all {allGroups.length} groups</p>
+          <p className="text-sm">Showing all {filteredGroups.length} groups</p>
+        </div>
+      )}
+
+      {filteredGroups.length === 0 && allGroups.length > 0 && (
+        <div className="card p-6 text-center text-gray-600">
+          <p className="font-medium">No groups match the selected filter.</p>
+          <p className="text-sm mt-1">Clear the selection (deselect all) to show all groups.</p>
         </div>
       )}
       </div>

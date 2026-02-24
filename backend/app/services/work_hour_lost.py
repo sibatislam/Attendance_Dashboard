@@ -44,25 +44,28 @@ def _extract_month(date_str: str) -> str:
 
 
 def _time_to_hours(time_str: str) -> float:
+    """Convert time string to hours. Handles datetime, HH:MM, and Excel serial (0-1 = fraction of day)."""
     if not time_str:
         return 0.0
     s = str(time_str).strip()
-    
+    # Excel serial: time stored as fraction of day (e.g. 0.395833 = 09:30)
+    try:
+        v = float(s.replace(",", "."))
+        if 0 < v <= 1:
+            return v * 24.0
+    except (ValueError, TypeError):
+        pass
     # Try to parse as datetime first (handles formats like "2024-05-01 09:00:00")
     try:
         dt = datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
         return dt.hour + dt.minute / 60.0 + dt.second / 3600.0
-    except:
+    except (ValueError, TypeError):
         pass
-    
-    # Try other datetime formats
     try:
         dt = datetime.strptime(s, "%H:%M:%S")
         return dt.hour + dt.minute / 60.0 + dt.second / 3600.0
-    except:
+    except (ValueError, TypeError):
         pass
-    
-    # Fallback: parse as HH:MM or HH:MM:SS
     parts = re.split(r'[:.]', s)
     if len(parts) >= 2:
         try:
@@ -70,9 +73,8 @@ def _time_to_hours(time_str: str) -> float:
             m = int(parts[1])
             sec = int(parts[2]) if len(parts) > 2 else 0
             return h + m / 60.0 + sec / 3600.0
-        except:
+        except (ValueError, TypeError):
             pass
-    
     return 0.0
 
 
@@ -153,10 +155,10 @@ def compute_work_hour_lost(db: Session, group_by: str) -> List[Dict[str, Any]]:
 
         flag = str(r.get("Flag", "")).strip()
         
-        # Skip weekends and holidays (Flag="W" or "H") for work hour lost calculations
-        if flag == "W" or flag == "H":
+        # Work hour lost: only count P (Present) and OD (On Duty). Skip W, H, EL, A, L, etc.
+        if flag != "P" and flag != "OD":
             continue
-        
+
         shift_in = str(r.get("Shift In Time", "")).strip()
         shift_out = str(r.get("Shift Out Time", "")).strip()
         in_time = str(r.get("In Time", "")).strip()
@@ -173,7 +175,7 @@ def compute_work_hour_lost(db: Session, group_by: str) -> List[Dict[str, Any]]:
         shift_hrs = _compute_duration_hours(shift_in, shift_out)
         work_hrs = _compute_duration_hours(in_time, out_time)
 
-        # Calculate lost hours per person per day: if shift is 9h and work is 8h, lost = 1h
+        # Only P and OD reach here. Add shift/work/lost for this day.
         if shift_hrs > 0:
             shift_hrs = round(shift_hrs, 2)
             work_hrs = round(work_hrs, 2)
@@ -181,21 +183,10 @@ def compute_work_hour_lost(db: Session, group_by: str) -> List[Dict[str, Any]]:
             shift_hours_sum[key] += shift_hrs
             work_hours_sum[key] += work_hrs
 
-            # Lost-hour business rule
-            # We count loss for Present, OD, and blank-flag days.
-            # - P/OD/blank + work > 0    → partial loss = shift - work (clamped at 0)
-            # - P/OD/blank + work == 0   → full shift lost
-            # - others (A, L, etc.) → no loss
-            countable_flags = ("P", "OD", "")
-            if flag in countable_flags:
-                if work_hrs > 0:
-                    lost_hrs = max(0.0, shift_hrs - work_hrs)
-                else:
-                    # Present/OD/blank but no in/out → full shift lost
-                    lost_hrs = shift_hrs
+            if work_hrs > 0:
+                lost_hrs = max(0.0, shift_hrs - work_hrs)
             else:
-                lost_hrs = 0.0
-
+                lost_hrs = shift_hrs
             lost_hrs = round(lost_hrs, 2)
             lost_hours_sum[key] += lost_hrs
 

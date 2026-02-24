@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { getODAnalysis } from '../lib/api'
 import DataTable from '../components/DataTable'
 import OdAnalysisCharts from '../components/OdAnalysisCharts'
+import { useScopeFilterOptions } from '../hooks/useScopeFilterOptions'
 
 const tabs = [
   { key: 'function', label: 'Function wise', column: 'Function', mode: 'table', base: 'function' },
@@ -56,18 +57,14 @@ export default function OdAnalysisPage() {
   const fromVal = fromM || months[0] || ''
   const toVal = toM || months[months.length - 1] || ''
 
-  // Get unique functions and employees for filters
+  // Scoped filter options so users only see allowed functions
+  const scopeFilter = useScopeFilterOptions()
   const uniqueFunctions = useMemo(() => {
-    const functions = new Set()
-    data.forEach(r => {
-      if (baseKey === 'employee' && r.function) {
-        functions.add(r.function)
-      } else if (baseKey === 'function' && r.group) {
-        functions.add(r.group)
-      }
-    })
-    return Array.from(functions).sort()
-  }, [data, baseKey])
+    const list = scopeFilter.functions || []
+    if (!Array.isArray(list)) return []
+    const names = list.map(f => (f && typeof f === 'object' ? f.name : f)).filter(Boolean)
+    return [...new Set(names)].sort()
+  }, [scopeFilter.functions])
 
   const uniqueEmployees = useMemo(() => {
     if (baseKey !== 'employee') return []

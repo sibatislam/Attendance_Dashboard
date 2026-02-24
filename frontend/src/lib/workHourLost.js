@@ -76,10 +76,13 @@ export function computeWorkHourLost(rows, groupBy) {
   }
 
   for (const r of rows) {
+    const flag = String(r['Flag'] || '').trim()
+    // Work hour lost: only count P (Present) and OD (On Duty). Skip EL, A, L, W, H, etc.
+    if (flag !== 'P' && flag !== 'OD') continue
+
     const month = monthOf(r['Attendance Date'] || '')
     const groupVal = String(r[groupKey] || '')
     const emp = String(r['Employee Code'] || r['Name'] || '')
-    const flag = String(r['Flag'] || '').trim()
     const shiftIn = String(r['Shift In Time'] || '').trim()
     const shiftOut = String(r['Shift Out Time'] || '').trim()
     const inTime = String(r['In Time'] || '').trim()
@@ -100,7 +103,6 @@ export function computeWorkHourLost(rows, groupBy) {
     const shiftHrs = computeDurationHours(shiftIn, shiftOut)
     const workHrs = computeDurationHours(inTime, outTime)
 
-    // Calculate lost hours per person per day: if shift is 9h and work is 8h, lost = 1h
     if (shiftHrs > 0) {
       const shiftHrsRounded = Number(shiftHrs.toFixed(2))
       const workHrsRounded = Number(workHrs.toFixed(2))
@@ -108,25 +110,10 @@ export function computeWorkHourLost(rows, groupBy) {
       shiftHoursSum.set(k, (shiftHoursSum.get(k) || 0) + shiftHrsRounded)
       workHoursSum.set(k, (workHoursSum.get(k) || 0) + workHrsRounded)
 
-      // Lost-hour business rule
-      // We count loss for Present, OD, and blank-flag days.
-      // - P/OD/blank + work > 0    → partial loss = shift - work (clamped at 0)
-      // - P/OD/blank + work == 0   → full shift lost
-      // - others (A, L, etc.) → no loss
-      const countableFlags = ['P', 'OD', '']
-      let lostHrs = 0
-      if (countableFlags.includes(flag)) {
-        if (workHrsRounded > 0) {
-          lostHrs = Math.max(0, shiftHrsRounded - workHrsRounded)
-        } else {
-          // Present/OD/blank but no in/out → full shift lost
-          lostHrs = shiftHrsRounded
-        }
-      } else {
-        lostHrs = 0.0
-      }
-      lostHrs = Number(lostHrs.toFixed(2))
-      lostHoursSum.set(k, (lostHoursSum.get(k) || 0) + lostHrs)
+      const lostHrs = workHrsRounded > 0
+        ? Math.max(0, shiftHrsRounded - workHrsRounded)
+        : shiftHrsRounded
+      lostHoursSum.set(k, (lostHoursSum.get(k) || 0) + Number(lostHrs.toFixed(2)))
     }
   }
 

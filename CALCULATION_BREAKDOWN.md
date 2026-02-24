@@ -170,7 +170,7 @@ completion_pct = (completed_count / total_work_days) × 100
 
 **Calculation**:
 ```python
-For each record in the week (excluding Flag="W" or "H"):
+For each record in the week with Flag="P" or Flag="OD" only (exclude W, H, EL, A, L, etc.):
     if shift_hours > 0 AND work_hours < shift_hours:
         lost_hours = shift_hours - work_hours
         lost_hours_sum[week_key] += lost_hours
@@ -210,6 +210,7 @@ lost_pct = (lost_hours_sum / shift_hours_sum) × 100
 
 ### Common Rules:
 - Both exclude weekends/holidays (Flag="W" or "H")
+- Both only count P (Present) and OD (On Duty) for work hour lost
 - Both use same time calculation logic
 - Both use same completion criteria (work_hours >= shift_hours for P/OD flags)
 - Both calculate lost hours the same way

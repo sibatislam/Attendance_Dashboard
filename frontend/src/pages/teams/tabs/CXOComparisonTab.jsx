@@ -558,7 +558,7 @@ export default function CXOComparisonTab({ files, employeeFiles, selectedFileId,
               onChange={(e) => setSelectedFileId(e.target.value ? parseInt(e.target.value) : null)}
               className="w-full px-4 py-2.5 border-2 border-gray-300 rounded-md bg-white text-gray-900 font-medium focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all shadow-sm hover:border-blue-400"
             >
-              <option value="">All Files</option>
+              {files.length === 0 && <option value="">No files uploaded</option>}
               {files.map(f => (
                 <option key={f.id} value={f.id}>
                   {formatMonthRange(f.from_month, f.to_month) || f.filename}
@@ -769,8 +769,8 @@ export default function CXOComparisonTab({ files, employeeFiles, selectedFileId,
           {cxoUserActivityCharts.map((userChart, idx) => {
             const file1 = files.find(f => f.id === selectedFileId)
             const file2 = files.find(f => f.id === compareFileId)
-            const file1Label = file1 ? `${file1.from_month} to ${file1.to_month}` : 'File 1'
-            const file2Label = file2 ? `${file2.from_month} to ${file2.to_month}` : 'File 2'
+            const file1Label = file1 ? formatMonthRange(file1.from_month, file1.to_month) || 'File 1' : 'File 1'
+            const file2Label = file2 ? formatMonthRange(file2.from_month, file2.to_month) || 'File 2' : 'File 2'
             const allKeys = Object.keys(userChart.chartData[0] || {}).filter(k => k !== 'activity')
             const file1Key = allKeys[0]
             const file2Key = allKeys[1]

@@ -99,23 +99,22 @@ def compute_od_analysis(db: Session, group_by: str) -> List[Dict[str, Any]]:
         return results
     
     elif group_by == "employee":
-        # Employee-wise aggregation
+        # Employee-wise aggregation; include company and department for user-wise filters
         results = []
-        
         for r in rows:
             if not isinstance(r, dict):
                 continue
+            emp_code = str(r.get("Employee Code", "")).strip()
             emp_name = str(r.get("Name", "")).strip()
-            if not emp_name:
+            emp_display = f"{emp_name} ({emp_code})" if (emp_code and emp_name) else (emp_code or emp_name)
+            if not emp_display:
                 continue
-            
             date_str = str(r.get("Attendance Date", ""))
             month = _extract_month(date_str)
-            company_name = str(r.get("Comapny Name", "")).strip()
+            company_name = str(r.get("Company Name", "") or r.get("Comapny Name", "")).strip()
             function_name = str(r.get("Function Name", "")).strip()
+            dept_str = str(r.get("Department Name", "") or r.get("Department", "")).strip()
             flag = str(r.get("Flag", "")).strip()
-            
-            # Create combined function name: Company - Function
             company_short = _get_company_short_name(company_name)
             if company_short and function_name:
                 combined_function = f"{company_short} - {function_name}"
@@ -123,40 +122,38 @@ def compute_od_analysis(db: Session, group_by: str) -> List[Dict[str, Any]]:
                 combined_function = function_name
             else:
                 combined_function = company_short or "Unknown"
-            
-            # Only count OD flags
             if flag == "OD":
                 results.append({
                     "month": month,
+                    "company": company_short or company_name or "Unknown",
                     "function": combined_function,
-                    "employee_name": emp_name,
+                    "department": dept_str,
+                    "employee_name": emp_display,
                     "od": 1,
                 })
-        
-        # Aggregate by month, function, employee
         aggregated = defaultdict(int)
         employee_info = {}
-        
         for r in results:
             key = (r["month"], r["function"], r["employee_name"])
             aggregated[key] += r["od"]
             employee_info[key] = {
                 "month": r["month"],
+                "company": r["company"],
                 "function": r["function"],
-                "employee_name": r["employee_name"]
+                "department": r["department"],
+                "employee_name": r["employee_name"],
             }
-        
-        # Build final results
         final_results = []
         for key, od_count in aggregated.items():
             info = employee_info[key]
             final_results.append({
                 "month": info["month"],
+                "company": info["company"],
                 "function": info["function"],
+                "department": info["department"],
                 "employee_name": info["employee_name"],
                 "od": od_count,
             })
-        
         final_results.sort(key=lambda x: (x["month"], x["function"], x["employee_name"]))
         return final_results
     

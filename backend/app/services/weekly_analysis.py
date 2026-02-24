@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
 from collections import defaultdict
 import re
@@ -155,10 +155,17 @@ def _format_week_key(year: int, month: int, week: int) -> str:
 
 
 def _time_to_hours(time_str: str) -> float:
-    """Convert time string to hours."""
+    """Convert time string to hours. Handles HH:MM, HH.MM, and Excel serial (0-1 = fraction of day)."""
     if not time_str:
         return 0.0
     s = str(time_str).strip()
+    # Excel serial: time stored as fraction of day (e.g. 0.395833 = 09:30)
+    try:
+        v = float(s.replace(",", "."))
+        if 0 < v <= 1:
+            return v * 24.0
+    except (ValueError, TypeError):
+        pass
     parts = re.split(r'[:.]', s)
     if len(parts) >= 2:
         try:
@@ -166,7 +173,7 @@ def _time_to_hours(time_str: str) -> float:
             m = int(parts[1])
             sec = int(parts[2]) if len(parts) > 2 else 0
             return h + m / 60.0 + sec / 3600.0
-        except:
+        except (ValueError, TypeError):
             pass
     return 0.0
 
@@ -183,10 +190,14 @@ def _compute_duration_hours(start_str: str, end_str: str) -> float:
     return max(0, end_h - start_h)
 
 
-def compute_weekly_analysis(db: Session, group_by: str) -> List[Dict[str, Any]]:
+def compute_weekly_analysis(
+    db: Session, group_by: str, breakdown: Optional[str] = None
+) -> List[Dict[str, Any]]:
     """
     Compute weekly aggregations for on-time %, work hour completion, and work hour lost.
     Returns data grouped by week and group (function/company/location).
+    When group_by is "function" and breakdown is "department", returns one row per (week, group, department)
+    with correct per-department member counts and metrics.
     """
     key_map = {
         "function": "Function Name",
@@ -203,15 +214,18 @@ def compute_weekly_analysis(db: Session, group_by: str) -> List[Dict[str, Any]]:
     group_key = key_map.get(group_by)
     if not group_key:
         raise ValueError(f"Invalid group_by: {group_by}. Must be one of: function, company, location")
-    
+
+    use_dept_breakdown = group_by == "function" and breakdown == "department"
+
     # Fetch all rows
     rows = db.query(UploadedRow).all()
-    
-    # Aggregation structures
-    members = defaultdict(set)  # (week, group) -> set of member IDs
+
+    # Aggregation structures; key is (week, group) or (week, group, department) when use_dept_breakdown
+    members = defaultdict(set)
     present_count = defaultdict(int)  # (week, group) -> count
     late_count = defaultdict(int)  # (week, group) -> count
     on_time_count = defaultdict(int)  # (week, group) -> count
+    group_departments = defaultdict(set)  # (week, group) -> set of department names
     
     # Work hour data
     shift_hours_sum = defaultdict(float)  # (week, group) -> total shift hours
@@ -263,27 +277,30 @@ def compute_weekly_analysis(db: Session, group_by: str) -> List[Dict[str, Any]]:
         week_tuple = _get_week_key(date)
         week_key = _format_week_key(week_tuple[0], week_tuple[1], week_tuple[2])
         
-        # Get group value
-        # For function-wise, combine Company - Function (like other services)
+        # Get group value and department
+        department_name = str(data.get("Department Name", "") or data.get("Department", "")).strip()
+        
+        # For function-wise, combine Company - Function. Prefer "Function" then fallbacks so attendance files with "Function Name" etc. still show function in charts and match Cost Settings.
         if group_by == "function":
-            # Try both "Company Name" and "Comapny Name"
             company_name = str(data.get("Company Name", "") or data.get("Comapny Name", "")).strip()
-            function_name = str(data.get("Function Name", "")).strip()
-            
-            # Extract base function name (remove company suffix patterns like " - CIPLC & CBL")
-            # Pattern: "Function Name - Company1 & Company2" -> "Function Name"
+            function_name = str(
+                data.get("Function", "")
+                or data.get("Function Name", "")
+                or data.get("Section Info", "")
+                or data.get("Function Name (Level 1)", "")
+                or data.get("Division", "")
+                or data.get("Business Function", "")
+                or ""
+            ).strip()
+            # Normalize: remove company suffix e.g. "CIPLC Factory - CIPLC" -> "CIPLC Factory" so it matches Employee List / Cost Settings
             base_function = function_name
             if " - " in function_name:
-                # Check if it ends with company abbreviations
                 parts = function_name.split(" - ")
                 if len(parts) >= 2:
                     last_part = parts[-1].strip().upper()
-                    # Check if last part looks like company abbreviations (CBL, CIPLC, CSEL, etc.)
                     company_abbrevs = ["CBL", "CIPLC", "CSEL"]
                     if any(abbrev in last_part for abbrev in company_abbrevs):
-                        # Remove the company suffix
                         base_function = " - ".join(parts[:-1]).strip()
-            
             company_short = _get_company_short_name(company_name)
             if company_short and base_function:
                 group_val = f"{company_short} - {base_function}"
@@ -313,11 +330,19 @@ def compute_weekly_analysis(db: Session, group_by: str) -> List[Dict[str, Any]]:
         
         if not member_id:
             continue
-        
-        key = (week_key, group_val)
-        
+
+        if use_dept_breakdown:
+            dept_key = department_name or "__no_dept__"
+            key = (week_key, group_val, dept_key)
+        else:
+            key = (week_key, group_val)
+
         # Track unique members
         members[key].add(member_id)
+
+        # Track department for this group (when not using dept breakdown)
+        if not use_dept_breakdown and department_name:
+            group_departments[key].add(department_name)
         
         # On-time analysis
         flag = str(data.get("Flag", "")).strip()
@@ -332,10 +357,11 @@ def compute_weekly_analysis(db: Session, group_by: str) -> List[Dict[str, Any]]:
         
         # Work hour analysis
         # Skip weekends and holidays (Flag="W" or "H")
+        # Only count P (Present) and OD (On Duty) for work hour lost calculation.
         if flag == "W" or flag == "H":
             # Still track for leave analysis, but skip work hour calculations
             pass
-        else:
+        elif flag == "P" or flag == "OD":
             shift_in = str(data.get("Shift In Time", "")).strip()
             shift_out = str(data.get("Shift Out Time", "")).strip()
             in_time = str(data.get("In Time", "")).strip()
@@ -350,10 +376,11 @@ def compute_weekly_analysis(db: Session, group_by: str) -> List[Dict[str, Any]]:
                 total_work_days[key] += 1
                 
                 # Check if work hours completed (work hours >= shift hours for P or OD)
-                if (flag == "P" or flag == "OD") and work_hours >= shift_hours and shift_hours > 0:
+                if work_hours >= shift_hours and shift_hours > 0:
                     completed_count[key] += 1
                 
-                # Calculate lost hours (shift hours - work hours, only if positive)
+                # Lost hours = shift hours minus actual work hours (per row, then summed per week+group).
+                # Only P and OD count for work hour lost.
                 if shift_hours > 0 and work_hours < shift_hours:
                     lost_hours = shift_hours - work_hours
                     lost_hours_sum[key] += lost_hours
@@ -376,9 +403,17 @@ def compute_weekly_analysis(db: Session, group_by: str) -> List[Dict[str, Any]]:
     results = []
     all_keys = set(members.keys())
     all_keys.update(shift_hours_sum.keys())
-    
+
     for key in all_keys:
-        week_key_str, group_val = key
+        if use_dept_breakdown and len(key) == 3:
+            week_key_str, group_val, dept_val = key
+            department = "" if dept_val == "__no_dept__" else dept_val
+        else:
+            week_key_str = key[0]
+            group_val = key[1]
+            departments = sorted(list(group_departments.get(key, set())))
+            department = ", ".join(departments) if departments else ""
+
         # Parse week key: YYYY-MM-WW
         week_parts = week_key_str.split('-')
         if len(week_parts) >= 3:
@@ -386,28 +421,27 @@ def compute_weekly_analysis(db: Session, group_by: str) -> List[Dict[str, Any]]:
             month = int(week_parts[1])
             week = int(week_parts[2].replace('W', ''))
         else:
-            # Fallback for old format
             year = int(week_parts[0]) if len(week_parts) > 0 else 2025
             month = 1
             week = int(week_parts[1].replace('W', '')) if len(week_parts) > 1 else 1
-        
+
         # On-time metrics
         present = present_count.get(key, 0)
         late = late_count.get(key, 0)
         on_time = on_time_count.get(key, 0)
         on_time_pct = round((on_time / present * 100.0), 2) if present > 0 else 0.0
-        
+
         # Work hour completion metrics
         shift_hours = shift_hours_sum.get(key, 0.0)
         work_hours = work_hours_sum.get(key, 0.0)
         completed = completed_count.get(key, 0)
         total_days = total_work_days.get(key, 0)
         completion_pct = round((completed / total_days * 100.0), 2) if total_days > 0 else 0.0
-        
+
         # Work hour lost metrics
         lost_hours = lost_hours_sum.get(key, 0.0)
         lost_pct = round((lost_hours / shift_hours * 100.0), 2) if shift_hours > 0 else 0.0
-        
+
         # Leave analysis metrics
         leave_members_count = len(leave_members.get(key, set()))
         sl = sl_count.get(key, 0)
@@ -415,17 +449,15 @@ def compute_weekly_analysis(db: Session, group_by: str) -> List[Dict[str, Any]]:
         a = a_count.get(key, 0)
         total_leave = total_leave_days.get(key, 0)
         total_leave_members = leave_members_count
-        
-        # Calculate leave percentages (based on total members who had leave activity)
+
         sl_pct = round((sl / total_leave * 100.0), 2) if total_leave > 0 else 0.0
         cl_pct = round((cl / total_leave * 100.0), 2) if total_leave > 0 else 0.0
         a_pct = round((a / total_leave * 100.0), 2) if total_leave > 0 else 0.0
-        
-        # Month name
+
         month_names = ['', 'January', 'February', 'March', 'April', 'May', 'June',
                       'July', 'August', 'September', 'October', 'November', 'December']
         month_name = month_names[month] if 1 <= month <= 12 else f"Month{month}"
-        
+
         results.append({
             "week": week_key_str,  # Keep original format for sorting/filtering
             "year": year,
@@ -433,6 +465,7 @@ def compute_weekly_analysis(db: Session, group_by: str) -> List[Dict[str, Any]]:
             "month_name": month_name,
             "week_in_month": week,
             "group": group_val,
+            "department": department,
             "members": len(members.get(key, set())),
             "present": present,
             "late": late,
@@ -441,6 +474,7 @@ def compute_weekly_analysis(db: Session, group_by: str) -> List[Dict[str, Any]]:
             "shift_hours": round(shift_hours, 2),
             "work_hours": round(work_hours, 2),
             "completed": completed,
+            "total_days": total_days,
             "completion_pct": completion_pct,
             "lost_hours": round(lost_hours, 2),
             "lost_pct": lost_pct,
@@ -455,7 +489,7 @@ def compute_weekly_analysis(db: Session, group_by: str) -> List[Dict[str, Any]]:
             "a_pct": a_pct,
         })
     
-    # Sort by year, month, week, and group
-    results.sort(key=lambda x: (x["year"], x["month"], x["week_in_month"], x["group"]))
-    
+    # Sort by year, month, week, group, and department (when breakdown)
+    results.sort(key=lambda x: (x["year"], x["month"], x["week_in_month"], x["group"], x.get("department", "")))
+
     return results

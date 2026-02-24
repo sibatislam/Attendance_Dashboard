@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { login } from '../lib/api'
 
 export default function LoginPage() {
@@ -9,6 +10,7 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [rememberMe, setRememberMe] = useState(false)
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -21,7 +23,14 @@ export default function LoginPage() {
       // Store token and user info
       localStorage.setItem('token', response.access_token)
       localStorage.setItem('user', JSON.stringify(response.user))
-      
+
+      // Remove scope and user caches so the new user's permissions and scope are always fetched
+      queryClient.removeQueries({ queryKey: ['myScope'] })
+      queryClient.removeQueries({ queryKey: ['currentUser'] })
+      queryClient.removeQueries({ queryKey: ['weekly_dashboard'] })
+      // Clear saved Weekly Dashboard filters so restricted users don't inherit another user's selections
+      localStorage.removeItem('weekly_dashboard_filters')
+
       // Navigate to module selection
       navigate('/modules')
     } catch (err) {

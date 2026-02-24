@@ -43,9 +43,16 @@ def _extract_month(date_str: str) -> str:
 
 
 def _time_to_hours(time_str: str) -> float:
+    """Convert time string to hours. Handles HH:MM, HH.MM, and Excel serial (0-1 = fraction of day)."""
     if not time_str:
         return 0.0
     s = str(time_str).strip()
+    try:
+        v = float(s.replace(",", "."))
+        if 0 < v <= 1:
+            return v * 24.0
+    except (ValueError, TypeError):
+        pass
     parts = re.split(r'[:.]', s)
     if len(parts) >= 2:
         try:
@@ -53,7 +60,7 @@ def _time_to_hours(time_str: str) -> float:
             m = int(parts[1])
             sec = int(parts[2]) if len(parts) > 2 else 0
             return h + m / 60.0 + sec / 3600.0
-        except:
+        except (ValueError, TypeError):
             pass
     return 0.0
 

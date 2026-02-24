@@ -63,6 +63,11 @@ class UserCreate(UserBase):
     password: str
     role: Optional[str] = "user"
     permissions: Optional[Dict[str, Any]] = None
+    employee_email: Optional[str] = None
+    data_scope_level: Optional[str] = None
+    allowed_functions: Optional[List[str]] = None
+    allowed_departments: Optional[List[str]] = None
+    allowed_companies: Optional[List[str]] = None
 
 
 class UserUpdate(BaseModel):
@@ -76,6 +81,11 @@ class UserUpdate(BaseModel):
     department: Optional[str] = None
     position: Optional[str] = None
     permissions: Optional[Dict[str, Any]] = None
+    employee_email: Optional[str] = None
+    data_scope_level: Optional[str] = None  # "N", "N-1", "N-2", ... or null
+    allowed_functions: Optional[List[str]] = None
+    allowed_departments: Optional[List[str]] = None
+    allowed_companies: Optional[List[str]] = None
 
 
 class UserResponse(UserBase):
@@ -83,6 +93,11 @@ class UserResponse(UserBase):
     role: str
     is_active: bool
     permissions: Optional[Dict[str, Any]] = None
+    employee_email: Optional[str] = None
+    data_scope_level: Optional[str] = None
+    allowed_functions: Optional[List[str]] = None
+    allowed_departments: Optional[List[str]] = None
+    allowed_companies: Optional[List[str]] = None
     last_login: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime

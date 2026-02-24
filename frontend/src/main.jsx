@@ -17,11 +17,14 @@ import FileDetailPage from './pages/FileDetailPage'
 import OnTimePage from './pages/OnTimePage'
 import WorkHourPage from './pages/WorkHourPage'
 import WorkHourLostPage from './pages/WorkHourLostPage'
+import CostSettingsPage from './pages/CostSettingsPage'
+import WorkHourLostCostPage from './pages/WorkHourLostCostPage'
 import LeaveAnalysisPage from './pages/LeaveAnalysisPage'
 import OdAnalysisPage from './pages/OdAnalysisPage'
 import WeeklyAnalysisPage from './pages/WeeklyAnalysisPage'
 import WeeklyDashboardPage from './pages/WeeklyDashboardPage'
 import UserWisePage from './pages/UserWisePage'
+import AttendanceRecognitionPage from './pages/AttendanceRecognitionPage'
 import TeamsUploadPage from './pages/teams/TeamsUploadPage'
 import TeamsBatchesPage from './pages/teams/TeamsBatchesPage'
 import TeamsFileDetailPage from './pages/teams/TeamsFileDetailPage'
@@ -31,6 +34,7 @@ import TeamsAppBatchesPage from './pages/teams/TeamsAppBatchesPage'
 import TeamsAppFileDetailPage from './pages/teams/TeamsAppFileDetailPage'
 import TeamsAppActivityPage from './pages/teams/TeamsAppActivityPage'
 import TeamsLicensePage from './pages/teams/TeamsLicensePage'
+import TeamsUserListPage from './pages/teams/TeamsUserListPage'
 import EmployeeUploadPage from './pages/employee/EmployeeUploadPage'
 import EmployeeBatchesPage from './pages/employee/EmployeeBatchesPage'
 import EmployeeFileDetailPage from './pages/employee/EmployeeFileDetailPage'
@@ -68,6 +72,10 @@ const router = createBrowserRouter([
         element: <PermissionRoute requiredFeature="dashboard"><DashboardPage /></PermissionRoute> 
       },
       { 
+        path: 'attendance-recognition', 
+        element: <PermissionRoute requiredFeature="dashboard"><AttendanceRecognitionPage /></PermissionRoute> 
+      },
+      { 
         path: 'weekly-dashboard', 
         element: <PermissionRoute requiredFeature="dashboard"><WeeklyDashboardPage /></PermissionRoute> 
       },
@@ -96,16 +104,24 @@ const router = createBrowserRouter([
         element: <PermissionRoute requiredFeature="work_hour_lost"><WorkHourLostPage /></PermissionRoute> 
       },
       { 
+        path: 'cost-settings', 
+        element: <PermissionRoute requiredFeature={['work_hour_lost', 'cost_settings']}><CostSettingsPage /></PermissionRoute> 
+      },
+      { 
+        path: 'work-hour-lost-cost', 
+        element: <PermissionRoute requiredFeature={['work_hour_lost', 'work_hour_lost_cost']}><WorkHourLostCostPage /></PermissionRoute> 
+      },
+      { 
         path: 'leave-analysis', 
         element: <PermissionRoute requiredFeature="leave_analysis"><LeaveAnalysisPage /></PermissionRoute> 
       },
       { 
         path: 'od-analysis', 
-        element: <OdAnalysisPage />
+        element: <PermissionRoute requiredFeature="od_analysis"><OdAnalysisPage /></PermissionRoute>
       },
       { 
         path: 'weekly-analysis', 
-        element: <WeeklyAnalysisPage />
+        element: <PermissionRoute requiredFeature="weekly_analysis"><WeeklyAnalysisPage /></PermissionRoute>
       },
       { 
         path: 'user-wise', 
@@ -146,6 +162,10 @@ const router = createBrowserRouter([
             element: <PermissionRoute requiredModule="teams_dashboard"><TeamsLicensePage /></PermissionRoute> 
           },
           { 
+            path: 'user-list', 
+            element: <PermissionRoute requiredModule="teams_dashboard" requiredFeature={['license_entry', 'teams_user_list']}><TeamsUserListPage /></PermissionRoute> 
+          },
+          { 
             path: 'app/upload', 
             element: <PermissionRoute requiredModule="teams_dashboard" requiredFeature="upload_app"><TeamsAppUploadPage /></PermissionRoute> 
           },
@@ -175,7 +195,9 @@ const router = createBrowserRouter([
         path: '/',
         element: <ProtectedRoute><ModuleSelectionPage /></ProtectedRoute>
       }
-    ])
+    ],
+    { future: { v7_startTransition: true } }
+  )
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>

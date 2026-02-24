@@ -56,6 +56,19 @@ try:
             cursor.execute("ALTER TABLE users ADD COLUMN last_login DATETIME NULL")
             print("✓ Added 'last_login' column")
         
+        # Add employee_email column if not exists (link to employee list for data scope)
+        if 'employee_email' not in existing_columns:
+            print("Adding 'employee_email' column...")
+            cursor.execute("ALTER TABLE users ADD COLUMN employee_email VARCHAR(255) NULL")
+            cursor.execute("CREATE INDEX ix_users_employee_email ON users (employee_email)")
+            print("✓ Added 'employee_email' column")
+        
+        # Add data_scope_level column if not exists (N, N-1, N-2)
+        if 'data_scope_level' not in existing_columns:
+            print("Adding 'data_scope_level' column...")
+            cursor.execute("ALTER TABLE users ADD COLUMN data_scope_level VARCHAR(20) NULL")
+            print("✓ Added 'data_scope_level' column")
+        
         connection.commit()
         print("\n✅ Migration completed successfully!")
         

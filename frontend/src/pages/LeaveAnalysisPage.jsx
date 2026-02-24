@@ -33,8 +33,8 @@ export default function LeaveAnalysisPage() {
     { key: 'cl_adjacent_w', label: 'CL Adjacent to W' },
     { key: 'sl_adjacent_h', label: 'SL Adjacent to H' },
     { key: 'cl_adjacent_h', label: 'CL Adjacent to H' },
-    { key: 'sl_pct', label: 'SL %' },
-    { key: 'cl_pct', label: 'CL %' },
+    { key: 'sl_pct', label: 'Adj. SL%' },
+    { key: 'cl_pct', label: 'Adj. CL%' },
     { key: 'a_pct', label: 'A %' },
   ]
 

@@ -1,29 +1,43 @@
 import { NavLink, Link } from 'react-router-dom'
 import { useState, useEffect } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { getCurrentUser } from '../lib/api'
 
 export default function Sidebar() {
-  const [user, setUser] = useState(null)
-  
+  const [localUser, setLocalUser] = useState(null)
   useEffect(() => {
     const userData = localStorage.getItem('user')
     if (userData) {
-      setUser(JSON.parse(userData))
+      try {
+        setLocalUser(JSON.parse(userData))
+      } catch (_) {
+        setLocalUser(null)
+      }
+    } else {
+      setLocalUser(null)
     }
   }, [])
-  
+
+  // Fetch current user from server so menu reflects latest role permissions (no re-login needed)
+  const { data: serverUser } = useQuery({
+    queryKey: ['currentUser'],
+    queryFn: getCurrentUser,
+    enabled: !!localStorage.getItem('token'),
+    staleTime: 1 * 60 * 1000,
+    refetchOnMount: 'always',
+  })
+  const user = serverUser || localUser
+
   const linkClass = ({ isActive }) =>
     `block px-4 py-2 rounded-md transition-colors ${isActive ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg' : 'text-gray-700 hover:bg-white/60'}`
 
-  // Check if user has permission for a feature
+  // Check if user has permission for a feature (uses server user when available)
   const hasPermission = (featureId) => {
     if (!user) return false
-    if (user.role === 'admin') return true // Admins have all permissions
-    
+    if (user.role === 'admin') return true
     const permissions = user.permissions || {}
     const attendancePerms = permissions.attendance_dashboard || {}
-    
-    if (!attendancePerms.enabled) return false // Module not enabled
-    
+    if (!attendancePerms.enabled) return false
     const features = attendancePerms.features || []
     return features.includes(featureId)
   }
@@ -51,16 +65,22 @@ export default function Sidebar() {
                 <span>Dashboard</span>
               </span>
             </NavLink>
+            <NavLink to="/attendance/attendance-recognition" className={linkClass}>
+              <span className="flex items-center gap-3">
+                <span className="lnr lnr-star"></span>
+                <span>Attendance Recognition</span>
+              </span>
+            </NavLink>
             <NavLink to="/attendance/weekly-dashboard" className={linkClass}>
               <span className="flex items-center gap-3">
                 <span className="lnr lnr-chart-bars"></span>
-                <span>Weekly Dashboard</span>
+                <span>Weekly Analytics</span>
               </span>
             </NavLink>
             <NavLink to="/attendance/user-wise" className={linkClass}>
               <span className="flex items-center gap-3">
                 <span className="lnr lnr-users"></span>
-                <span>User Wise</span>
+                <span>User Analytics</span>
               </span>
             </NavLink>
           </>
@@ -81,13 +101,33 @@ export default function Sidebar() {
             </span>
           </NavLink>
         )}
-        {hasPermission('work_hour_lost') && (
-          <NavLink to="/attendance/work-hour-lost" className={linkClass}>
-            <span className="flex items-center gap-3">
-              <span className="lnr lnr-hourglass"></span>
-              <span>Work Hour Lost</span>
-            </span>
-          </NavLink>
+        {(hasPermission('work_hour_lost') || hasPermission('cost_settings') || hasPermission('work_hour_lost_cost')) && (
+          <>
+            {hasPermission('work_hour_lost') && (
+              <NavLink to="/attendance/work-hour-lost" className={linkClass}>
+                <span className="flex items-center gap-3">
+                  <span className="lnr lnr-hourglass"></span>
+                  <span>Work Hour Lost</span>
+                </span>
+              </NavLink>
+            )}
+            {hasPermission('work_hour_lost') || hasPermission('cost_settings') ? (
+              <NavLink to="/attendance/cost-settings" className={linkClass}>
+                <span className="flex items-center gap-3">
+                  <span className="lnr lnr-cog"></span>
+                  <span>Cost Settings</span>
+                </span>
+              </NavLink>
+            ) : null}
+            {hasPermission('work_hour_lost') || hasPermission('work_hour_lost_cost') ? (
+              <NavLink to="/attendance/work-hour-lost-cost" className={linkClass}>
+                <span className="flex items-center gap-3">
+                  <span className="lnr lnr-pie-chart"></span>
+                  <span>Lost Hours Cost Analysis</span>
+                </span>
+              </NavLink>
+            ) : null}
+          </>
         )}
         {hasPermission('leave_analysis') && (
           <NavLink to="/attendance/leave-analysis" className={linkClass}>
@@ -97,18 +137,22 @@ export default function Sidebar() {
             </span>
           </NavLink>
         )}
-        <NavLink to="/attendance/od-analysis" className={linkClass}>
-          <span className="flex items-center gap-3">
-            <span className="lnr lnr-briefcase"></span>
-            <span>OD Analysis</span>
-          </span>
-        </NavLink>
-        <NavLink to="/attendance/weekly-analysis" className={linkClass}>
-          <span className="flex items-center gap-3">
-            <span className="lnr lnr-calendar-full"></span>
-            <span>Weekly Analysis</span>
-          </span>
-        </NavLink>
+        {hasPermission('od_analysis') && (
+          <NavLink to="/attendance/od-analysis" className={linkClass}>
+            <span className="flex items-center gap-3">
+              <span className="lnr lnr-briefcase"></span>
+              <span>OD Analysis</span>
+            </span>
+          </NavLink>
+        )}
+        {hasPermission('weekly_analysis') && (
+          <NavLink to="/attendance/weekly-analysis" className={linkClass}>
+            <span className="flex items-center gap-3">
+              <span className="lnr lnr-calendar-full"></span>
+              <span>Weekly Analysis</span>
+            </span>
+          </NavLink>
+        )}
         {hasPermission('upload') && (
           <NavLink to="/attendance/upload" className={linkClass}>
             <span className="flex items-center gap-3">

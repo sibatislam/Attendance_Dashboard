@@ -10,7 +10,7 @@ echo [Start] Launching Backend and Frontend in separate windows...
 start "Backend" cmd /k scripts\windows\run_backend.bat
 start "Frontend" cmd /k scripts\windows\run_frontend.bat
 
-echo [Start] Done. Backend: http://localhost:8000  Frontend: http://localhost:5173
+echo [Start] Done. Backend: http://localhost:8081  Frontend: http://localhost:5173
 exit /b 0
 
 
