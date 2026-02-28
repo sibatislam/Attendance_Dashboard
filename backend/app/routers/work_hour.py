@@ -4,10 +4,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from ..db import get_db
+from ..models import AppConfig
 
 logger = logging.getLogger(__name__)
 from ..auth import get_current_user
 from ..models import User
+
+# Config keys for CTC (must match config router)
+_CTC_PER_HOUR_KEY = "ctc_per_hour_bdt"
+_CTC_PER_HOUR_BY_FUNCTION_PREFIX = "ctc_per_hour_bdt:"
 from ..services.work_hour import compute_work_hour_completion
 from ..services.work_hour_lost import compute_work_hour_lost
 from ..services.leave_analysis import compute_leave_analysis
@@ -214,6 +219,72 @@ def _filter_weekly_by_scope(
     return out
 
 
+def _load_ctc_rates(db: Session) -> tuple[float | None, dict[str, float]]:
+    """Load default CTC per hour and CTC by function from AppConfig. Returns (default_ctc, ctc_by_function)."""
+    default_ctc = None
+    row = db.query(AppConfig).filter(AppConfig.key == _CTC_PER_HOUR_KEY).first()
+    if row and row.value not in (None, ""):
+        try:
+            default_ctc = float(row.value)
+        except (TypeError, ValueError):
+            pass
+    ctc_by_function = {}
+    rows = db.query(AppConfig).filter(AppConfig.key.like(f"{_CTC_PER_HOUR_BY_FUNCTION_PREFIX}%")).all()
+    for r in rows:
+        if not r.value:
+            continue
+        fn = r.key[len(_CTC_PER_HOUR_BY_FUNCTION_PREFIX) :].strip()
+        if fn:
+            try:
+                ctc_by_function[fn] = float(r.value)
+            except (TypeError, ValueError):
+                pass
+    return default_ctc, ctc_by_function
+
+
+def _get_rate_for_group(group: str, default_ctc: float | None, ctc_by_function: dict[str, float]) -> float | None:
+    """Resolve CTC per hour for a weekly row group (e.g. 'CIPLC - Finance & Accounts'). Matches frontend getRateForGroup."""
+    g = (group or "").strip()
+    dash_idx = g.find(" - ")
+    function_part = g[dash_idx + 3 :].strip() if dash_idx >= 0 else g
+    if function_part and function_part in ctc_by_function:
+        return ctc_by_function[function_part]
+    return default_ctc
+
+
+def _compute_company_totals_full(
+    full_result: List[Dict[str, Any]],
+    default_ctc: float | None,
+    ctc_by_function: dict[str, float],
+) -> Dict[str, Dict[str, float]]:
+    """
+    From unscoped weekly rows (group_by=function), aggregate cost by (month_key, company).
+    Used so N-1 users see full company totals in the Lost Hours Cost company cards.
+    """
+    # month_key -> company -> total cost (BDT)
+    totals: Dict[str, Dict[str, float]] = {}
+    for row in full_result:
+        group = (row.get("group") or "").strip()
+        if not group:
+            continue
+        dash_idx = group.find(" - ")
+        company = (group[:dash_idx].strip() if dash_idx >= 0 else group) or "Unknown"
+        lost = float(row.get("lost") or row.get("lost_hours") or 0)
+        rate = _get_rate_for_group(group, default_ctc, ctc_by_function)
+        if rate is None:
+            continue
+        cost = round(lost * rate, 2)
+        year = row.get("year")
+        month = row.get("month")
+        if year is None or month is None:
+            continue
+        month_key = f"{year}-{int(month):02d}"
+        if month_key not in totals:
+            totals[month_key] = {}
+        totals[month_key][company] = round((totals[month_key].get(company, 0) + cost) * 100) / 100
+    return totals
+
+
 @router.get("/weekly/{group_by}")
 @router.get("/weekly/{group_by}/")
 def weekly_analysis(
@@ -221,14 +292,49 @@ def weekly_analysis(
     breakdown: str | None = Query(None, description="When 'department', return one row per (week, group, department) with per-department member counts"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> List[Dict[str, Any]]:
-    """Get weekly analysis data (on-time %, work hour completion, work hour lost). Filtered by user scope for non-admin."""
+):
+    """Get weekly analysis data (on-time %, work hour completion, work hour lost). Filtered by user scope for non-admin.
+    Returns { data: list, company_totals_full?: dict } so N-1 users get full company totals for Lost Hours Cost cards."""
     try:
-        result = compute_weekly_analysis(db, group_by, breakdown=breakdown)
         from ..services.employee_hierarchy import get_effective_scope
+
+        result_full, company_month_agg = compute_weekly_analysis(db, group_by, breakdown=breakdown)
         scope = get_effective_scope(db, current_user)
-        count_before = len(result)
-        result = _filter_weekly_by_scope(result, group_by, scope)
+        count_before = len(result_full)
+        result = _filter_weekly_by_scope(result_full, group_by, scope)
+
+        # Always compute company totals from full data when possible so Lost Hour Cost analysis
+        # shows correct company lost hour cost for both admin and N-1 (single source of truth).
+        company_totals_full = None
+        company_wise_full = None
+        if group_by == "function" and breakdown == "department":
+            default_ctc, ctc_by_function = _load_ctc_rates(db)
+            if default_ctc is not None or ctc_by_function:
+                company_totals_full = _compute_company_totals_full(result_full, default_ctc, ctc_by_function)
+            if company_month_agg is not None:
+                # Full company-wise rows (members, shift, work, lost, cost) so N-1 sees same table as admin
+                company_wise_full = []
+                for (month_key, company), agg in company_month_agg.items():
+                    members = len(agg.get("members") or set())
+                    shift_hours = round(agg.get("shift_hours") or 0, 2)
+                    work_hours = round(agg.get("work_hours") or 0, 2)
+                    lost = round(agg.get("lost") or 0, 2)
+                    cost = round((company_totals_full or {}).get(month_key, {}).get(company, 0), 2)
+                    year = int(month_key.split("-")[0]) if "-" in month_key else 0
+                    month = int(month_key.split("-")[1]) if len(month_key.split("-")) > 1 else 0
+                    company_wise_full.append({
+                        "month_key": month_key,
+                        "year": year,
+                        "month": month,
+                        "company": company,
+                        "members": members,
+                        "shift_hours": shift_hours,
+                        "work_hours": work_hours,
+                        "lost": lost,
+                        "cost": cost,
+                    })
+                company_wise_full.sort(key=lambda x: (x["month_key"], x["company"]))
+
         if not result:
             username = getattr(current_user, "username", None) or getattr(current_user, "email", None) or "?"
             if count_before > 0:
@@ -244,7 +350,13 @@ def weekly_analysis(
                     "Weekly dashboard empty for user (no rows before filter): username=%s, group_by=%s, breakdown=%s",
                     username, group_by, breakdown,
                 )
-        return result
+
+        out = {"data": result}
+        if company_totals_full is not None:
+            out["company_totals_full"] = company_totals_full
+        if company_wise_full is not None:
+            out["company_wise_full"] = company_wise_full
+        return out
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

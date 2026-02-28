@@ -35,6 +35,8 @@ def _user_to_response(user: User, db: Session):
         "role": user.role or "user",
         "is_active": user.is_active,
         "permissions": perms,
+        "employee_email": getattr(user, "employee_email", None) or None,
+        "data_scope_level": getattr(user, "data_scope_level", None) or None,
         "last_login": datetime_to_iso_utc(user.last_login),
         "created_at": datetime_to_iso_utc(user.created_at),
         "updated_at": datetime_to_iso_utc(user.updated_at),

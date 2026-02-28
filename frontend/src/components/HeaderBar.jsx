@@ -31,7 +31,7 @@ export default function HeaderBar({ right }) {
             </div>
             <button
               onClick={() => navigate('/profile', { state: { from: location.pathname } })}
-              className="px-3 py-1.5 text-xs border border-white/40 backdrop-blur-sm bg-white/30 text-gray-700 rounded-md hover:bg-white/50 transition-all flex items-center gap-1"
+              className="px-3 py-1.5 text-xs bg-indigo-100 border border-indigo-200 text-indigo-800 rounded-md hover:bg-indigo-200 transition-all flex items-center gap-1"
             >
               <span className="lnr lnr-user"></span>
               Profile
@@ -39,9 +39,9 @@ export default function HeaderBar({ right }) {
             {user.role === 'admin' && (
               <button
                 onClick={() => navigate('/admin/users')}
-                className="px-3 py-1.5 text-xs border border-white/40 backdrop-blur-sm bg-white/30 text-gray-700 rounded-md hover:bg-white/50 transition-all"
+                className="px-3 py-1.5 text-xs bg-slate-100 border border-slate-300 text-slate-800 rounded-md hover:bg-slate-200 transition-all"
               >
-                User & role management
+                User & Role Management
               </button>
             )}
             <button

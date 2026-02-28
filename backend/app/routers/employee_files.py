@@ -9,7 +9,7 @@ from ..db import get_db
 from ..models import EmployeeUploadedFile, EmployeeUploadedRow
 from ..schemas import UploadedFileListItem, UploadedFileDetail, DeleteRequest, DeleteResponse
 from ..auth import get_current_user, get_current_admin_user
-from ..services.employee_hierarchy import build_hierarchy_map, get_scope_options
+from ..services.employee_hierarchy import build_hierarchy_map, get_scope_options, _build_child_map
 
 router = APIRouter()
 
@@ -54,6 +54,61 @@ def get_employee_hierarchy(
                 source_filename=row.get("source_filename") or None,
             )
         )
+    return out
+
+
+class OrganogramSupervisor(BaseModel):
+    name: str
+    email: str
+    employee_code: Optional[str] = None
+    company: Optional[str] = None
+    function: Optional[str] = None
+    department: Optional[str] = None
+
+
+class OrganogramEntry(BaseModel):
+    supervisor: OrganogramSupervisor
+    direct_subordinates: List[OrganogramSupervisor]
+
+
+@router.get("/organogram", response_model=List[OrganogramEntry])
+def get_organogram(
+    employee_file_id: Optional[int] = Query(None, description="Use specific file; else latest"),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_admin_user),
+):
+    """
+    Organogram: each supervisor and their direct subordinates from the Employee List.
+    Built from Supervisor Name and Line Manager Employee ID. Shown in tables (supervisor → table of direct reports).
+    """
+    hierarchy_map = build_hierarchy_map(db, employee_file_id)
+    if not hierarchy_map:
+        return []
+    child_map = _build_child_map(hierarchy_map)
+    out: List[OrganogramEntry] = []
+    for parent_email in sorted(hierarchy_map.keys(), key=lambda e: (hierarchy_map[e].get("name") or e).lower()):
+        row = hierarchy_map[parent_email]
+        supervisor = OrganogramSupervisor(
+            name=row.get("name") or row["email"],
+            email=row["email"],
+            employee_code=row.get("employee_code") or None,
+            company=row.get("company") or None,
+            function=row.get("function") or None,
+            department=row.get("department") or None,
+        )
+        children = child_map.get(parent_email, [])
+        direct_subordinates = [
+            OrganogramSupervisor(
+                name=(hierarchy_map[c].get("name") or hierarchy_map[c]["email"]),
+                email=hierarchy_map[c]["email"],
+                employee_code=hierarchy_map[c].get("employee_code") or None,
+                company=hierarchy_map[c].get("company") or None,
+                function=hierarchy_map[c].get("function") or None,
+                department=hierarchy_map[c].get("department") or None,
+            )
+            for c in sorted(children, key=lambda e: (hierarchy_map[e].get("name") or e).lower())
+        ]
+        out.append(OrganogramEntry(supervisor=supervisor, direct_subordinates=direct_subordinates))
     return out
 
 

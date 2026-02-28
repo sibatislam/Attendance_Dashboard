@@ -11,6 +11,21 @@ def _norm(s: str) -> str:
     return (s or "").strip().lower()
 
 
+def _norm_employee_code(s: str) -> str:
+    """Normalize employee code / line manager ID so 11410 and 11410.0 (Excel) match."""
+    s = (s or "").strip()
+    if not s:
+        return ""
+    s_lower = s.lower()
+    # If it looks like a number (possibly with .0), strip trailing .0 for consistent lookup
+    if s_lower.replace(".", "").replace(" ", "").isdigit():
+        try:
+            return str(int(float(s)))
+        except (ValueError, TypeError):
+            pass
+    return s_lower
+
+
 def _get_cell(data: Dict[str, Any], *keys: str) -> str:
     """Get first non-empty value for any of the given keys. Tries exact match, then case-insensitive + strip match on data keys."""
     # Exact match first
@@ -91,18 +106,18 @@ def build_hierarchy_map(
     code_to_email: Dict[str, str] = {}
     for e, v in email_to_row.items():
         if v.get("employee_code"):
-            code_to_email[v["employee_code"].lower()] = e
+            code_to_email[_norm_employee_code(v["employee_code"])] = e
         code_to_email[e] = e
 
     def parent_email(row: Dict[str, Any]) -> Optional[str]:
         lm_id = (row.get("line_manager_employee_id") or "").strip()
         sup_name = (row.get("supervisor_name") or "").strip()
         if lm_id:
-            lm_lower = lm_id.lower()
-            if lm_lower in code_to_email:
-                return code_to_email[lm_lower]
-            if "@" in lm_id and lm_lower in email_to_row:
-                return lm_lower
+            lm_norm = _norm_employee_code(lm_id)
+            if lm_norm and lm_norm in code_to_email:
+                return code_to_email[lm_norm]
+            if "@" in lm_id and lm_id.lower().strip() in email_to_row:
+                return lm_id.lower().strip()
         if sup_name:
             for emp, r2 in email_to_row.items():
                 if (r2.get("name") or "").strip().lower() == sup_name.lower():
@@ -154,6 +169,178 @@ def build_hierarchy_map(
         row["level"] = level_map.get(e)
 
     return email_to_row
+
+
+def _build_child_map(hierarchy_map: Dict[str, Dict[str, Any]]) -> Dict[str, List[str]]:
+    """Build parent_email -> [child_emails] from hierarchy_map (for subordinate scope)."""
+    if not hierarchy_map:
+        return {}
+    code_to_email: Dict[str, str] = {}
+    for e, v in hierarchy_map.items():
+        if v.get("employee_code"):
+            code_to_email[_norm_employee_code(v["employee_code"])] = e
+        code_to_email[e.lower()] = e
+
+    def parent_email(row: Dict[str, Any]) -> Optional[str]:
+        lm_id = (row.get("line_manager_employee_id") or "").strip()
+        sup_name = (row.get("supervisor_name") or "").strip()
+        if lm_id:
+            lm_norm = _norm_employee_code(lm_id)
+            if lm_norm and lm_norm in code_to_email:
+                return code_to_email[lm_norm]
+            if "@" in lm_id and lm_id.lower() in hierarchy_map:
+                return lm_id.lower()
+        if sup_name:
+            sup_lower = sup_name.lower()
+            for emp, r2 in hierarchy_map.items():
+                if _norm(r2.get("name") or "") == sup_lower:
+                    return emp
+        return None
+
+    child_map: Dict[str, List[str]] = {}
+    for e, row in hierarchy_map.items():
+        p = parent_email(row)
+        if p and p in hierarchy_map:
+            child_map.setdefault(p, []).append(e)
+    return child_map
+
+
+def get_emails_and_codes_in_functions(
+    hierarchy_map: Dict[str, Dict[str, Any]],
+    allowed_functions: List[str],
+) -> tuple[set, set]:
+    """
+    Return (emails_set, codes_set) for all employees whose function is in allowed_functions.
+    Used for N-1: see all employees under their function, not just subordinates.
+    """
+    if not hierarchy_map or not allowed_functions:
+        return (set(), set())
+    func_set = {f.strip().lower() for f in allowed_functions if (f or "").strip()}
+    emails = set()
+    codes = set()
+    for e, row in hierarchy_map.items():
+        f = (row.get("function") or "").strip().lower()
+        if f and f in func_set:
+            emails.add(e.lower())
+            code = (row.get("employee_code") or "").strip()
+            if code:
+                codes.add(code.lower())
+    return (emails, codes)
+
+
+def get_subordinate_emails(
+    hierarchy_map: Dict[str, Dict[str, Any]],
+    child_map: Dict[str, List[str]],
+    employee_email: str,
+) -> set:
+    """
+    Return set of employee emails this user can see: self + all subordinates (transitive).
+    - If level is N (root): return all emails in hierarchy (see everyone).
+    - If no subordinates: return only {employee_email}.
+    - Otherwise: return {employee_email} union all descendants in the tree.
+    """
+    if not hierarchy_map or not employee_email:
+        return set()
+    email_lower = employee_email.strip().lower()
+    if email_lower not in hierarchy_map:
+        return {email_lower}
+    row = hierarchy_map[email_lower]
+    level = (row.get("level") or "").strip()
+    if level == "N":
+        return set(hierarchy_map.keys())
+    out = {email_lower}
+    q = deque([email_lower])
+    while q:
+        parent = q.popleft()
+        for child in child_map.get(parent, []):
+            if child not in out:
+                out.add(child)
+                q.append(child)
+    return out
+
+
+def get_allowed_employee_codes_for_attendance(
+    db: Session, user: Any
+) -> tuple[Optional[set], Optional[set], Optional[set], Optional[set]]:
+    """
+    Return (allowed_codes, allowed_emails, allowed_departments, allowed_functions) for filtering attendance rows.
+    If user is admin or level N: returns (None, None, None, None) — no filter.
+    If user has explicit allowed_functions (e.g. two functions selected): returns all employees in those functions.
+    N-1: returns all employees in user's function (not just subordinates).
+    N-2 and below: returns self + subordinates only.
+    """
+    if getattr(user, "role", None) == "admin":
+        return (None, None, None, None)
+    level = (getattr(user, "data_scope_level", None) or "").strip()
+    if level == "N" or getattr(user, "role", None) == "N":
+        return (None, None, None, None)
+    hierarchy_map = build_hierarchy_map(db, None)
+    if not hierarchy_map:
+        return (None, None, None, None)
+
+    # Explicit allowed_functions (user selected multiple functions): use only when NOT N-2/N-3/... so subordinates still work
+    is_n2_or_deeper = level.startswith("N-") and level not in ("N", "N-1") if level else False
+    af = getattr(user, "allowed_functions", None)
+    if isinstance(af, list) and len(af) > 0 and not is_n2_or_deeper:
+        _func_names = []
+        for f in af:
+            if isinstance(f, dict):
+                _func_names.append((f.get("name") or f.get("value") or "").strip())
+            elif f is not None:
+                _func_names.append(str(f).strip())
+        _func_names = [x for x in _func_names if x]
+        if _func_names:
+            allowed_emails_set, allowed_codes_set = get_emails_and_codes_in_functions(hierarchy_map, _func_names)
+            if allowed_emails_set or allowed_codes_set:
+                return (allowed_codes_set, allowed_emails_set, None, None)
+    emp_email = (getattr(user, "employee_email", None) or getattr(user, "email", None) or "").strip().lower()
+    emp_username = (getattr(user, "username", None) or "").strip().lower()
+    username_part = emp_username.split("@")[0] if "@" in emp_username else emp_username
+    key = hierarchy_map.get(emp_email) and emp_email or (hierarchy_map.get(emp_username) and emp_username)
+    if not key and username_part:
+        for _e in hierarchy_map:
+            if (_e.split("@")[0] if "@" in _e else _e) == username_part:
+                key = _e
+                break
+    if not key:
+        return (None, None, None, None)
+
+    # N-1: all employees in user's function (subordinates logic not applicable).
+    # Return None for depts/funcs so file detail only filters by code/email (avoids excluding rows
+    # when attendance file function/department names differ from Employee List).
+    if level == "N-1":
+        emp = hierarchy_map.get(key)
+        func = (emp.get("function") or "").strip() if emp else ""
+        if not func:
+            return (None, None, None, None)
+        allowed_emails_set, allowed_codes_set = get_emails_and_codes_in_functions(hierarchy_map, [func])
+        if not allowed_emails_set and not allowed_codes_set:
+            return (None, None, None, None)
+        return (allowed_codes_set, allowed_emails_set, None, None)
+
+    # N-2, N-3, ...: self + subordinates only
+    child_map = _build_child_map(hierarchy_map)
+    allowed_emails_set = get_subordinate_emails(hierarchy_map, child_map, key)
+    codes = set()
+    emails = set()
+    departments = set()
+    functions = set()
+    for e in allowed_emails_set:
+        emails.add(e.lower())
+        row = hierarchy_map.get(e)
+        if not row:
+            continue
+        if (row.get("employee_code") or "").strip():
+            codes.add((row.get("employee_code") or "").strip().lower())
+        d = (row.get("department") or "").strip().lower()
+        if d:
+            departments.add(d)
+        f = (row.get("function") or "").strip().lower()
+        if f:
+            functions.add(f)
+    if not (codes or emails):
+        return (None, None, None, None)
+    return (codes, emails, departments or None, functions or None)
 
 
 def scope_for_user(
@@ -270,6 +457,8 @@ def get_effective_scope(
     """
     if getattr(user, "role", None) == "admin":
         return {"all": True, "allowed_functions": None, "allowed_departments": None, "allowed_companies": None}
+    if getattr(user, "role", None) == "N":
+        return {"all": True, "allowed_functions": None, "allowed_departments": None, "allowed_companies": None}
     af = getattr(user, "allowed_functions", None)
     ad = getattr(user, "allowed_departments", None)
     ac = getattr(user, "allowed_companies", None)
@@ -379,9 +568,17 @@ def get_scope_options_for_user(
     scope = get_effective_scope(db, user)
     if scope.get("all"):
         return full
-    ac = set((str(c).strip() for c in (scope.get("allowed_companies") or [])))
-    af = set((str(f).strip() for f in (scope.get("allowed_functions") or [])))
-    ad = set((str(d).strip() for d in (scope.get("allowed_departments") or [])))
+
+    def _norm_item(x, key_name="name"):
+        if x is None:
+            return ""
+        if isinstance(x, dict):
+            return (x.get(key_name) or x.get("value") or "").strip()
+        return str(x).strip()
+
+    ac = set(_norm_item(c) for c in (scope.get("allowed_companies") or []) if _norm_item(c))
+    af = set(_norm_item(f) for f in (scope.get("allowed_functions") or []) if _norm_item(f))
+    ad = set(_norm_item(d) for d in (scope.get("allowed_departments") or []) if _norm_item(d))
     full_companies = full.get("companies") or []
     full_functions = full.get("functions") or []
     full_departments = full.get("departments") or []
@@ -405,9 +602,10 @@ def get_scope_options_for_user(
     ]
     if ad and not af:
         af = {(x.get("function") or "").strip() for x in full_departments if _dept_in_scope(x.get("name"), ad)}
+    af_lower = {a.lower() for a in af} if af else set()
     functions = [
         x for x in full_functions
-        if (not af or (x.get("name") or "").strip() in af) and (not ac or x.get("company") in ac)
+        if (not af or (x.get("name") or "").strip().lower() in af_lower) and (not ac or x.get("company") in ac)
     ]
     if ac and not companies and full_departments:
         companies = list({x.get("company") for x in departments if x.get("company") in ac})

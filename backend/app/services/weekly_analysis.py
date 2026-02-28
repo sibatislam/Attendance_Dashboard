@@ -192,12 +192,14 @@ def _compute_duration_hours(start_str: str, end_str: str) -> float:
 
 def compute_weekly_analysis(
     db: Session, group_by: str, breakdown: Optional[str] = None
-) -> List[Dict[str, Any]]:
+):
     """
     Compute weekly aggregations for on-time %, work hour completion, and work hour lost.
-    Returns data grouped by week and group (function/company/location).
-    When group_by is "function" and breakdown is "department", returns one row per (week, group, department)
-    with correct per-department member counts and metrics.
+    Returns (results, company_month_agg):
+    - results: list of rows grouped by week and group (function/company/location).
+      When group_by is "function" and breakdown is "department", one row per (week, group, department).
+    - company_month_agg: when group_by is "function" and breakdown is "department", dict of
+      (month_key, company) -> { members, shift_hours, work_hours, lost } for full company view (N-1); else None.
     """
     key_map = {
         "function": "Function Name",
@@ -399,10 +401,11 @@ def compute_weekly_analysis(
             a_count[key] += 1
             total_leave_days[key] += 1
     
-    # Build results
+    # Build results and optionally company-level aggregates per month (for N-1 full company view)
     results = []
     all_keys = set(members.keys())
     all_keys.update(shift_hours_sum.keys())
+    company_month_agg = {}  # (month_key, company) -> { members: set, shift_hours, work_hours, lost }
 
     for key in all_keys:
         if use_dept_breakdown and len(key) == 3:
@@ -441,6 +444,18 @@ def compute_weekly_analysis(
         # Work hour lost metrics
         lost_hours = lost_hours_sum.get(key, 0.0)
         lost_pct = round((lost_hours / shift_hours * 100.0), 2) if shift_hours > 0 else 0.0
+
+        # Company-level aggregation per month (for N-1 full company summary)
+        if use_dept_breakdown and group_val:
+            month_key = f"{year}-{month:02d}"
+            company = (group_val.split(" - ")[0].strip() if " - " in group_val else group_val) or "Unknown"
+            ckey = (month_key, company)
+            if ckey not in company_month_agg:
+                company_month_agg[ckey] = {"members": set(), "shift_hours": 0.0, "work_hours": 0.0, "lost": 0.0}
+            company_month_agg[ckey]["members"].update(members.get(key, set()))
+            company_month_agg[ckey]["shift_hours"] += shift_hours
+            company_month_agg[ckey]["work_hours"] += work_hours
+            company_month_agg[ckey]["lost"] += lost_hours
 
         # Leave analysis metrics
         leave_members_count = len(leave_members.get(key, set()))
@@ -492,4 +507,6 @@ def compute_weekly_analysis(
     # Sort by year, month, week, group, and department (when breakdown)
     results.sort(key=lambda x: (x["year"], x["month"], x["week_in_month"], x["group"], x.get("department", "")))
 
-    return results
+    if not use_dept_breakdown:
+        company_month_agg = None
+    return results, company_month_agg

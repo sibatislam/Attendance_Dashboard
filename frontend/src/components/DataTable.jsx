@@ -141,8 +141,8 @@ export default function DataTable({ columns, headers, rows, isSubtotalRow: isSub
             {normalized.map((c, idx) => (
               <th
                 key={idx}
-                className={`th px-3 py-2 bg-gray-100 !text-center ${c.sortable ? 'cursor-pointer hover:bg-gray-200 select-none' : ''} ${c.wrapText ? 'td-wrap-cell' : ''} ${c.compact ? 'th-compact' : ''}`}
-                style={c.fillRemaining ? { width: '1%', minWidth: '120px' } : undefined}
+                className={`th px-3 py-2 !text-center align-middle ${c.headerStyle?.backgroundColor ? '' : 'bg-gray-100'} ${c.sortable ? 'cursor-pointer hover:bg-gray-200 select-none' : ''} ${c.wrapText ? 'td-wrap-cell' : ''} ${c.compact ? 'th-compact' : ''}`}
+                style={{ ...(c.fillRemaining ? { width: '1%', minWidth: '120px' } : {}), ...(c.headerStyle || {}) }}
                 title={c.title || undefined}
                 onClick={() => handleSort(c)}
               >
@@ -172,11 +172,13 @@ export default function DataTable({ columns, headers, rows, isSubtotalRow: isSub
         <tbody className="divide-y divide-gray-200">
           {sortedRows.map((r, idx) => (
             <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-              {normalized.map((c, cidx) => (
+              {normalized.map((c, cidx) => {
+                const cellStyle = typeof c.cellStyle === 'function' ? c.cellStyle(r) : (c.cellStyle || {})
+                return (
                 <td
                   key={cidx}
-                  className={`px-3 py-2 text-sm text-gray-900 !text-center ${c.wrapText ? 'align-top td-wrap-cell' : c.compact ? 'td-compact' : 'td'}`}
-                  style={c.fillRemaining ? { width: '1%', minWidth: '120px' } : undefined}
+                  className={`px-3 py-2 text-sm text-gray-900 !text-center align-middle ${c.wrapText ? 'td-wrap-cell' : c.compact ? 'td-compact' : 'td'}`}
+                  style={{ ...(c.fillRemaining ? { width: '1%', minWidth: '120px' } : {}), ...cellStyle }}
                 >
                   {typeof c.render === 'function'
                     ? c.render(r)
@@ -193,7 +195,7 @@ export default function DataTable({ columns, headers, rows, isSubtotalRow: isSub
                           : display
                       })()}
                 </td>
-              ))}
+              )})}
             </tr>
           ))}
         </tbody>

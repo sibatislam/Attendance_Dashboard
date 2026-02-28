@@ -1,6 +1,6 @@
 import { useState, useMemo, Fragment } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getUsers, createUser, updateUser, deleteUser, deleteUsers, downloadUserBulkTemplate, bulkUploadUsers, syncUsersRolesFromHierarchy, getScopeFromHierarchy, getRoles, createRole, updateRole, deleteRole, getEmployeeHierarchy, getScopeOptions, getEmployeeRowByEmail } from '../lib/api'
+import { getUsers, createUser, updateUser, deleteUser, deleteUsers, downloadUserBulkTemplate, bulkUploadUsers, syncUsersRolesFromHierarchy, getScopeFromHierarchy, getRoles, createRole, updateRole, deleteRole, getEmployeeHierarchy, getOrganogram, getScopeOptions, getEmployeeRowByEmail } from '../lib/api'
 import { useNavigate } from 'react-router-dom'
 import MultiSelectSearchable from '../components/MultiSelectSearchable'
 import TeamsUserListPage from './teams/TeamsUserListPage'
@@ -43,6 +43,7 @@ const ATTENDANCE_PERMISSIONS = [
   { id: 'user_wise_leave_analysis', name: 'User Wise - Leave Analysis', description: 'Leave Analysis tab inside User Wise', group: 'tab' },
   { id: 'user_wise_od_analysis', name: 'User Wise - OD Analysis', description: 'OD Analysis tab inside User Wise', group: 'tab' },
   { id: 'user_wise_work_hour_lost_cost', name: 'User Wise - Lost Hours Cost', description: 'Lost Hours Cost tab inside User Wise', group: 'tab' },
+  { id: 'user_wise_cost_impact', name: 'User Wise - Cost Impact', description: 'Cost Impact tab: your cost vs department/function/company', group: 'tab' },
   { id: 'on_time', name: 'On Time %', description: 'View on-time percentage reports (standalone menu)', group: 'menu' },
   { id: 'work_hour', name: 'Work Hour Completion', description: 'View work hour completion reports', group: 'menu' },
   { id: 'work_hour_lost', name: 'Work Hour Lost', description: 'View work hour lost reports', group: 'menu' },
@@ -110,7 +111,7 @@ const ATTENDANCE_MENU_TABLE = [
     { id: 'weekly_dashboard_tab_function', label: 'Function' }, { id: 'weekly_dashboard_tab_company', label: 'Company' }, { id: 'weekly_dashboard_tab_location', label: 'Location' }, { id: 'weekly_dashboard_tab_department', label: 'Department' }
   ]},
   { type: 'menu', id: 'user_wise', label: 'User Analytics', subMenus: [
-    { id: 'user_wise_on_time', label: 'On Time %' }, { id: 'user_wise_work_hour', label: 'Work Hour Completion' }, { id: 'user_wise_work_hour_lost', label: 'Work Hour Lost' }, { id: 'user_wise_work_hour_lost_cost', label: 'Lost Hours Cost' }, { id: 'user_wise_leave_analysis', label: 'Leave Analysis' }, { id: 'user_wise_od_analysis', label: 'OD Analysis' }
+    { id: 'user_wise_on_time', label: 'On Time %' }, { id: 'user_wise_work_hour', label: 'Work Hour Completion' }, { id: 'user_wise_work_hour_lost', label: 'Work Hour Lost' }, { id: 'user_wise_work_hour_lost_cost', label: 'Lost Hours Cost' }, { id: 'user_wise_cost_impact', label: 'Cost Impact' }, { id: 'user_wise_leave_analysis', label: 'Leave Analysis' }, { id: 'user_wise_od_analysis', label: 'OD Analysis' }
   ]},
   { type: 'menu', id: 'on_time', label: 'On Time %' },
   { type: 'menu', id: 'work_hour', label: 'Work Hour Completion' },
@@ -247,6 +248,14 @@ export default function UserManagementPage() {
     enabled: mainTab === 'employees',
     refetchOnWindowFocus: false,
     refetchOnMount: 'always', // always refetch when opening tab so deleted employee list = empty table
+  })
+
+  const { data: organogramData = [] } = useQuery({
+    queryKey: ['organogram'],
+    queryFn: () => getOrganogram(),
+    enabled: mainTab === 'organogram',
+    refetchOnWindowFocus: false,
+    refetchOnMount: 'always',
   })
 
   const { data: scopeOptions = { functions: [], departments: [], companies: [] } } = useQuery({
@@ -624,7 +633,7 @@ export default function UserManagementPage() {
         <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-white">User & role management</h1>
+              <h1 className="text-2xl font-bold text-white">User & Role Management</h1>
               <p className="text-sm text-gray-300 mt-1">Manage users, roles, and module/menu permissions</p>
             </div>
             <button
@@ -635,39 +644,46 @@ export default function UserManagementPage() {
               Back to Modules
             </button>
           </div>
-          <div className="flex gap-2 mt-4">
+          <div className="flex flex-wrap gap-2 mt-4 overflow-x-auto pb-1">
             <button
               type="button"
               onClick={() => setMainTab('users')}
-              className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mainTab === 'users' ? 'bg-white text-gray-800' : 'bg-white/10 text-white hover:bg-white/20'}`}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-all shrink-0 ${mainTab === 'users' ? 'bg-white text-gray-800' : 'bg-white/10 text-white hover:bg-white/20'}`}
             >
               Users
             </button>
             <button
               type="button"
-              onClick={() => setMainTab('roles')}
-              className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mainTab === 'roles' ? 'bg-white text-gray-800' : 'bg-white/10 text-white hover:bg-white/20'}`}
-            >
-              Role management
-            </button>
-            <button
-              type="button"
               onClick={() => setMainTab('employees')}
-              className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mainTab === 'employees' ? 'bg-white text-gray-800' : 'bg-white/10 text-white hover:bg-white/20'}`}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-all shrink-0 ${mainTab === 'employees' ? 'bg-white text-gray-800' : 'bg-white/10 text-white hover:bg-white/20'}`}
             >
               Employees (N / N-1 / N-2)
             </button>
             <button
               type="button"
+              onClick={() => setMainTab('organogram')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-all shrink-0 ${mainTab === 'organogram' ? 'bg-white text-gray-800' : 'bg-white/10 text-white hover:bg-white/20'}`}
+            >
+              Organogram
+            </button>
+            <button
+              type="button"
+              onClick={() => setMainTab('roles')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-all shrink-0 ${mainTab === 'roles' ? 'bg-white text-gray-800' : 'bg-white/10 text-white hover:bg-white/20'}`}
+            >
+              Role management
+            </button>
+            <button
+              type="button"
               onClick={() => setMainTab('organization')}
-              className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mainTab === 'organization' ? 'bg-white text-gray-800' : 'bg-white/10 text-white hover:bg-white/20'}`}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-all shrink-0 ${mainTab === 'organization' ? 'bg-white text-gray-800' : 'bg-white/10 text-white hover:bg-white/20'}`}
             >
               Organization
             </button>
             <button
               type="button"
               onClick={() => setMainTab('teams_user_list')}
-              className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mainTab === 'teams_user_list' ? 'bg-white text-gray-800' : 'bg-white/10 text-white hover:bg-white/20'}`}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-all shrink-0 ${mainTab === 'teams_user_list' ? 'bg-white text-gray-800' : 'bg-white/10 text-white hover:bg-white/20'}`}
             >
               MS Teams User list
             </button>
@@ -736,6 +752,67 @@ export default function UserManagementPage() {
                 </ul>
               </div>
             </div>
+          </div>
+        )}
+
+        {mainTab === 'organogram' && (
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-xl font-bold text-gray-800">Organogram</h2>
+              <p className="text-sm text-gray-600 mt-1">
+                Supervisor and their direct subordinates, built from the latest <strong>Employee List</strong> (columns: <strong>Email (Offical)</strong>, <strong>Employee Code</strong>, <strong>Line Manager Employee ID</strong>, Supervisor Name). Each table shows one supervisor and their direct reports.
+              </p>
+            </div>
+            {organogramData.length === 0 ? (
+              <div className="bg-white rounded-lg shadow border border-gray-200 px-6 py-8 text-center text-gray-500">
+                No organogram data. Upload an Employee List file (with Supervisor Name and Line Manager Employee ID) first.
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {organogramData.map((entry, idx) => (
+                  <div key={idx} className="bg-white rounded-lg shadow-lg border border-gray-200 overflow-hidden">
+                    <div className="px-4 py-3 bg-gray-100 border-b border-gray-200">
+                      <h3 className="text-sm font-semibold text-gray-800">
+                        Supervisor: {entry.supervisor?.name || '—'} {entry.supervisor?.employee_code ? `(${entry.supervisor.employee_code})` : ''} — {entry.supervisor?.email || '—'}
+                        {entry.supervisor?.department ? ` · ${entry.supervisor.department}` : ''}{entry.supervisor?.function ? ` · ${entry.supervisor.function}` : ''}
+                      </h3>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-gray-700 uppercase">Name</th>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-gray-700 uppercase">Email</th>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-gray-700 uppercase">Employee Code</th>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-gray-700 uppercase">Department</th>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-gray-700 uppercase">Function</th>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-gray-700 uppercase">Company</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200">
+                          {(!entry.direct_subordinates || entry.direct_subordinates.length === 0) ? (
+                            <tr>
+                              <td colSpan={6} className="px-4 py-3 text-sm text-gray-500 italic">No direct subordinates</td>
+                            </tr>
+                          ) : (
+                            entry.direct_subordinates.map((sub, subIdx) => (
+                              <tr key={subIdx} className="hover:bg-gray-50">
+                                <td className="px-4 py-2 text-sm text-gray-900">{sub.name || '—'}</td>
+                                <td className="px-4 py-2 text-sm text-gray-700">{sub.email || '—'}</td>
+                                <td className="px-4 py-2 text-sm text-gray-700">{sub.employee_code || '—'}</td>
+                                <td className="px-4 py-2 text-sm text-gray-700">{sub.department || '—'}</td>
+                                <td className="px-4 py-2 text-sm text-gray-700">{sub.function || '—'}</td>
+                                <td className="px-4 py-2 text-sm text-gray-700">{sub.company || '—'}</td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 

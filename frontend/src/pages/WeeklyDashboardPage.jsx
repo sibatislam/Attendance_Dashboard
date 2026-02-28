@@ -142,7 +142,7 @@ export default function WeeklyDashboardPage() {
     }
   }, [active, visibleTabs, scopeFilter.isDepartmentOnly])
 
-  const { data: weeklyData = [], isLoading, isError, error } = useQuery({ 
+  const { data: weeklyResponse, isLoading, isError, error } = useQuery({ 
     queryKey: ['weekly_dashboard', baseKey, useDepartmentBreakdown ? 'breakdown_department' : null], 
     queryFn: () => getWeeklyAnalysis(baseKey, useDepartmentBreakdown ? 'department' : null),
     retry: 1,
@@ -160,9 +160,11 @@ export default function WeeklyDashboardPage() {
       })
     },
     onSuccess: (data) => {
-      console.log('[WeeklyDashboard] Data loaded:', data?.length || 0, 'records')
+      const rows = Array.isArray(data) ? data : (data?.data ?? [])
+      console.log('[WeeklyDashboard] Data loaded:', rows?.length || 0, 'records')
     }
   })
+  const weeklyData = Array.isArray(weeklyResponse) ? weeklyResponse : (weeklyResponse?.data ?? [])
 
   // Get unique months (combine year and month for proper sorting)
   // Backend returns month as integer (1-12) and year separately
@@ -763,28 +765,26 @@ export default function WeeklyDashboardPage() {
         </div>
         
         <div className="flex items-center gap-3 flex-wrap">
-          <label className="text-sm text-gray-600">Month:</label>
-          <select 
-            className="btn-outline" 
-            value={selectedMonth || ''} 
-            onChange={e => {
-              setSelectedMonth(e.target.value)
-              setSelectedWeeks([]) // Clear selected weeks when month changes
-            }}
-          >
-            <option value="">All Months</option>
-            {months.map(m => {
-              // m is in YYYY-MM format
-              const [year, monthNum] = m.split('-')
-              const month = parseInt(monthNum, 10)
-              return (
-                <option key={m} value={m}>
-                  {monthNames[month] || `Month ${month}`} {year}
-                </option>
-              )
-            })}
-          </select>
-          
+          <div className="min-w-[200px]">
+            <MultiSelectSearchable
+              id="month-filter"
+              label="Month"
+              icon="lnr-calendar-full"
+              value={selectedMonth ? [selectedMonth] : []}
+              onChange={vals => {
+                const v = Array.isArray(vals) && vals.length ? vals[vals.length - 1] : ''
+                setSelectedMonth(v)
+                setSelectedWeeks([])
+              }}
+              options={months.map(m => {
+                const [year, monthNum] = m.split('-')
+                const month = parseInt(monthNum, 10)
+                return { value: m, label: `${monthNames[month] || `Month ${month}`} ${year}` }
+              })}
+              placeholder="All Months"
+            />
+          </div>
+
           {active === 'function' && !scopeFilter.isDepartmentOnly && (
             <MultiSelectSearchable
               id="function-filter"
@@ -1101,10 +1101,42 @@ export default function WeeklyDashboardPage() {
   )
 }
 
+// Calculation help content for the View Users modal
+const CALCULATION_HELP = {
+  on_time: {
+    title: 'How On Time % is calculated',
+    points: [
+      'Only attendance rows for the selected group, month, and week(s) are included.',
+      'Present = count of days with Flag "P" (Present) and "OD" (Outdoor Duty). Late = count with late arrival (Is Late = yes). On Time = Present and not late.',
+      'On Time % = (On Time count ÷ (Present + Late)) × 100 when there is at least one present/late day, else 0.',
+      'Each user is aggregated by Employee Code/Name from the attendance file; Company and Function come from the row.',
+    ],
+  },
+  work_hour: {
+    title: 'How Work Hour Completion is calculated',
+    points: [
+      'Only rows with Flag "P" (Present) or "OD" (Outdoor Duty) are included; weekends (W) and holidays (H) are excluded.',
+      'Shift Hours = duration between Shift In Time and Shift Out Time (overnight shifts supported). Work Hours = duration between In Time and Out Time.',
+      'A day counts as "Completed" when Work Hours ≥ Shift Hours for that day.',
+      'Completion % = (Completed days ÷ Total work days) × 100. Total Days = days with valid shift hours; Completed Days = days where the user met or exceeded shift hours.',
+    ],
+  },
+  work_hour_lost: {
+    title: 'How Work Hour Lost is calculated',
+    points: [
+      'Only rows with Flag "P" (Present) or "OD" (Outdoor Duty) are included; weekends and holidays are excluded.',
+      'Shift Hours = duration between Shift In Time and Shift Out Time. Work Hours = duration between In Time and Out Time.',
+      'Lost Hours = max(0, Shift Hours − Work Hours) for each day. If Work Hours = 0, Lost = full Shift Hours.',
+      'Lost % = (Total Lost Hours ÷ Total Shift Hours) × 100. Actual Overtime = max(0, Total Work Hours − Total Shift Hours − Total Lost Hours).',
+    ],
+  },
+}
+
 // User-wise Modal Component
 function UserWiseModal({ group, month, weeks, groupBy, metric, onClose }) {
   const [isLoading, setIsLoading] = useState(true)
   const [userData, setUserData] = useState([])
+  const [showCalcHelp, setShowCalcHelp] = useState(false)
   
   const metricLabels = {
     on_time: 'On Time %',
@@ -1397,7 +1429,7 @@ function UserWiseModal({ group, month, weeks, groupBy, metric, onClose }) {
           // Calculate based on metric type
           if (metric === 'on_time') {
             const isLate = String(r['Is Late'] || '').trim().toLowerCase() === 'yes'
-            if (flag === 'P') {
+            if (flag === 'P' || flag === 'OD') {
               data.present += 1
               if (isLate) {
                 data.late += 1
@@ -1434,7 +1466,7 @@ function UserWiseModal({ group, month, weeks, groupBy, metric, onClose }) {
               }
             }
           } else if (metric === 'work_hour_lost') {
-            // Only count P (Present) and OD (On Duty). Skip W, H, EL, A, L, etc.
+            // Only count P (Present) and OD (Outdoor Duty). Skip W, H, EL, A, L, etc.
             const flagStr = String(flag).trim()
             if (flagStr !== 'P' && flagStr !== 'OD') continue
 
@@ -1507,7 +1539,7 @@ function UserWiseModal({ group, month, weeks, groupBy, metric, onClose }) {
               ? ((totalLostHours / totalShiftHours) * 100).toFixed(2)
               : '0.00'
             
-            // Actual Overtime = sum(work hours) - sum(shift hours) - sum(lost hours), min 0
+            // Actual Overtime = max(0, Work Hours − Shift Hours − Lost Hours), same as User Analytics
             const actualOvertime = Math.max(0, totalWorkHours - totalShiftHours - totalLostHours)
             
             results.push({
@@ -1626,15 +1658,39 @@ function UserWiseModal({ group, month, weeks, groupBy, metric, onClose }) {
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={onClose}>
       <div className="bg-white rounded-lg shadow-xl max-w-[95vw] w-full max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
         <div className="p-6 border-b border-gray-200 flex items-center justify-between">
-          <div>
-            <h3 className="text-xl font-bold text-gray-900">User-wise {metricLabels[metric] || 'On Time %'}</h3>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="text-xl font-bold text-gray-900">User-wise {metricLabels[metric] || 'On Time %'}</h3>
+              <button
+                type="button"
+                onClick={() => setShowCalcHelp(!showCalcHelp)}
+                className="inline-flex items-center justify-center w-8 h-8 rounded text-gray-500 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                title={showCalcHelp ? 'Hide calculation info' : 'How is this calculated?'}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <path fillRule="evenodd" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" clipRule="evenodd" />
+                </svg>
+              </button>
+            </div>
             <p className="text-sm text-gray-600 mt-1">
               {group} - {monthLabel} - {weeksLabel}
             </p>
+            {showCalcHelp && (CALCULATION_HELP[metric] || CALCULATION_HELP.on_time) && (
+              <div className="mt-3 p-4 bg-slate-50 border border-slate-200 rounded-lg text-left">
+                <h4 className="text-sm font-semibold text-slate-800 mb-2">
+                  {(CALCULATION_HELP[metric] || CALCULATION_HELP.on_time).title}
+                </h4>
+                <ul className="text-sm text-slate-700 space-y-1.5 list-disc list-inside">
+                  {((CALCULATION_HELP[metric] || CALCULATION_HELP.on_time).points || []).map((point, i) => (
+                    <li key={i}>{point}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 transition-colors"
+            className="text-gray-400 hover:text-gray-600 transition-colors shrink-0 ml-2"
             title="Close"
           >
             <span className="lnr lnr-cross text-2xl"></span>

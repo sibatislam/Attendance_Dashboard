@@ -14,7 +14,15 @@ from ..schemas import UserResponse, UserCreate, UserUpdate
 from ..auth import get_current_admin_user, get_current_user, get_password_hash
 from ..utils import datetime_to_iso_utc
 from .roles import get_permissions_for_role, _ensure_default_roles
-from ..services.employee_hierarchy import build_hierarchy_map, scope_for_user, get_scope_options_for_user, scope_to_persist_for_user
+from ..services.employee_hierarchy import (
+    build_hierarchy_map,
+    scope_for_user,
+    get_scope_options_for_user,
+    scope_to_persist_for_user,
+    _build_child_map,
+    get_subordinate_emails,
+    get_emails_and_codes_in_functions,
+)
 
 
 class BulkDeleteRequest(BaseModel):
@@ -122,6 +130,7 @@ def get_my_scope(
         ("user_wise_work_hour", "work_hour"),
         ("user_wise_work_hour_lost", "work_hour_lost"),
         ("user_wise_work_hour_lost_cost", "work_hour_lost_cost"),
+        ("user_wise_cost_impact", "cost_impact"),
         ("user_wise_leave_analysis", "leave_analysis"),
         ("user_wise_od_analysis", "od_analysis"),
     ]
@@ -129,65 +138,172 @@ def get_my_scope(
         if feat_id in features:
             visible_tabs_user_wise.append(tab_name)
     if not visible_tabs_user_wise:
-        visible_tabs_user_wise = ["on_time", "work_hour", "work_hour_lost", "work_hour_lost_cost", "leave_analysis", "od_analysis"]
+        visible_tabs_user_wise = ["on_time", "work_hour", "work_hour_lost", "work_hour_lost_cost", "cost_impact", "leave_analysis", "od_analysis"]
 
     filter_options = get_scope_options_for_user(db, current_user)
+    hierarchy_map = build_hierarchy_map(db, None) if current_user.role != "admin" else {}
+    employee_code_from_list = None
+    current_user_hierarchy_key = None
+    if hierarchy_map:
+        emp_email = (current_user.employee_email or current_user.email or "").strip().lower()
+        emp_username = (getattr(current_user, "username", None) or "").strip().lower()
+        username_part = emp_username.split("@")[0] if "@" in emp_username else emp_username
+        emp_row = hierarchy_map.get(emp_email) if emp_email else None
+        if emp_row:
+            current_user_hierarchy_key = emp_email
+        if not emp_row and emp_username:
+            emp_row = hierarchy_map.get(emp_username)
+            if emp_row:
+                current_user_hierarchy_key = emp_username
+        if not emp_row and username_part:
+            for _e, row in hierarchy_map.items():
+                if (_e.split("@")[0] if "@" in _e else _e) == username_part:
+                    emp_row = row
+                    current_user_hierarchy_key = _e
+                    break
+        if emp_row and (emp_row.get("employee_code") or "").strip():
+            employee_code_from_list = (emp_row.get("employee_code") or "").strip()
+        if not current_user_hierarchy_key and employee_code_from_list:
+            from ..services.employee_hierarchy import _norm_employee_code
+            code_norm = _norm_employee_code(employee_code_from_list)
+            for _e, row in hierarchy_map.items():
+                if code_norm and _norm_employee_code(row.get("employee_code") or "") == code_norm:
+                    current_user_hierarchy_key = _e
+                    break
+
+    allowed_employee_emails = []
+    allowed_employee_codes = []
+    direct_employee_emails = []
+    direct_employee_codes = []
+    data_scope_level = (getattr(current_user, "data_scope_level", None) or "").strip() or None
+    # N: see all employees (subordinates logic not applicable)
+    if current_user.role == "N" or data_scope_level == "N":
+        scope_email = current_user_hierarchy_key or (current_user.employee_email or current_user.email or "").strip() or None
+        out = scope_for_user(db, scope_email, data_scope_level or "N", hierarchy_map=hierarchy_map)
+        out["visible_tabs"] = visible_tabs
+        out["visible_tabs_dashboard"] = visible_tabs_dashboard
+        out["visible_tabs_user_wise"] = visible_tabs_user_wise
+        out.setdefault("allowed_companies", None)
+        out["filter_options"] = filter_options
+        out["employee_code_from_list"] = employee_code_from_list
+        out["allowed_employee_emails"] = []
+        out["allowed_employee_codes"] = []
+        out["direct_employee_emails"] = []
+        out["direct_employee_codes"] = []
+        return out
+    if current_user.role != "admin":
+        if hierarchy_map and current_user_hierarchy_key:
+            # N-1: all employees under user's function (subordinates logic not applicable)
+            if data_scope_level == "N-1":
+                scope_email = current_user_hierarchy_key or (current_user.employee_email or current_user.email or "").strip() or None
+                scope = scope_for_user(db, scope_email, "N-1", hierarchy_map=hierarchy_map)
+                allowed_funcs = scope.get("allowed_functions") or []
+                if allowed_funcs:
+                    allowed_emails_set, allowed_codes_set = get_emails_and_codes_in_functions(hierarchy_map, allowed_funcs)
+                    allowed_employee_emails = list(allowed_emails_set)
+                    allowed_employee_codes = list(allowed_codes_set)
+                # direct_* left empty so frontend uses allowed_* (whole function), not direct reports only
+            else:
+                # N-2, N-3, ...: self + subordinates only
+                child_map = _build_child_map(hierarchy_map)
+                allowed_emails_set = get_subordinate_emails(hierarchy_map, child_map, current_user_hierarchy_key)
+                allowed_employee_emails = list(allowed_emails_set)
+                allowed_employee_codes = list({
+                    (hierarchy_map[e].get("employee_code") or "").strip()
+                    for e in allowed_emails_set
+                    if hierarchy_map.get(e) and (hierarchy_map[e].get("employee_code") or "").strip()
+                })
+                direct_emails_set = set(child_map.get(current_user_hierarchy_key, []))
+                direct_employee_emails = list(direct_emails_set)
+                direct_employee_codes = list({
+                    (hierarchy_map[e].get("employee_code") or "").strip()
+                    for e in direct_emails_set
+                    if hierarchy_map.get(e) and (hierarchy_map[e].get("employee_code") or "").strip()
+                })
+        elif employee_code_from_list:
+            allowed_employee_codes = [employee_code_from_list]
+            emp = (current_user.employee_email or current_user.email or "").strip().lower()
+            if emp:
+                allowed_employee_emails = [emp]
+
+    def _scope_response(extra=None):
+        d = {
+            "visible_tabs": visible_tabs,
+            "visible_tabs_dashboard": visible_tabs_dashboard,
+            "visible_tabs_user_wise": visible_tabs_user_wise,
+            "filter_options": filter_options,
+            "employee_code_from_list": employee_code_from_list,
+        }
+        if extra:
+            d.update(extra)
+        return d
+
     if current_user.role == "admin":
-        return {
+        return _scope_response({
             "all": True,
             "allowed_functions": None,
             "allowed_departments": None,
             "allowed_companies": None,
             "data_scope_level": None,
-            "visible_tabs": visible_tabs,
-            "visible_tabs_dashboard": visible_tabs_dashboard,
-            "visible_tabs_user_wise": visible_tabs_user_wise,
-            "filter_options": filter_options,
-        }
+        })
     # User-level allowed lists: if set (non-empty), use them; else derive from hierarchy / own
     af = getattr(current_user, "allowed_functions", None)
     ad = getattr(current_user, "allowed_departments", None)
     ac = getattr(current_user, "allowed_companies", None)
+    # When user has explicit allowed_functions (e.g. two functions selected), include all employees in those functions.
+    # Do NOT overwrite for N-2, N-3, ... so they keep hierarchy-derived direct_employee_codes (subordinates).
+    is_n2_or_deeper = data_scope_level and str(data_scope_level).strip().startswith("N-") and str(data_scope_level).strip() not in ("N", "N-1")
+    if isinstance(af, list) and len(af) > 0 and hierarchy_map and not is_n2_or_deeper:
+        _func_names = []
+        for f in af:
+            if isinstance(f, dict):
+                _func_names.append((f.get("name") or f.get("value") or "").strip())
+            elif f is not None:
+                _func_names.append(str(f).strip())
+        _func_names = [x for x in _func_names if x]
+        if _func_names:
+            allowed_emails_set, allowed_codes_set = get_emails_and_codes_in_functions(hierarchy_map, _func_names)
+            allowed_employee_emails = list(allowed_emails_set)
+            allowed_employee_codes = list(allowed_codes_set)
+            direct_employee_emails = []
+            direct_employee_codes = []
+    _sub = {
+        "allowed_employee_emails": allowed_employee_emails,
+        "allowed_employee_codes": allowed_employee_codes,
+        "direct_employee_emails": direct_employee_emails,
+        "direct_employee_codes": direct_employee_codes,
+    }
     if isinstance(af, list) and len(af) > 0:
-        return {
+        return _scope_response({
             "all": False,
             "allowed_functions": af,
             "allowed_departments": ad if isinstance(ad, list) else None,
             "allowed_companies": ac if isinstance(ac, list) else None,
             "data_scope_level": current_user.data_scope_level,
-            "visible_tabs": visible_tabs,
-            "visible_tabs_dashboard": visible_tabs_dashboard,
-            "visible_tabs_user_wise": visible_tabs_user_wise,
-            "filter_options": filter_options,
-        }
+            **_sub,
+        })
     if isinstance(ad, list) and len(ad) > 0:
-        return {
+        return _scope_response({
             "all": False,
             "allowed_functions": af if isinstance(af, list) else None,
             "allowed_departments": ad,
             "allowed_companies": ac if isinstance(ac, list) else None,
             "data_scope_level": current_user.data_scope_level,
-            "visible_tabs": visible_tabs,
-            "visible_tabs_dashboard": visible_tabs_dashboard,
-            "visible_tabs_user_wise": visible_tabs_user_wise,
-            "filter_options": filter_options,
-        }
+            **_sub,
+        })
     if isinstance(ac, list) and len(ac) > 0:
-        return {
+        return _scope_response({
             "all": False,
             "allowed_functions": af if isinstance(af, list) else None,
             "allowed_departments": ad if isinstance(ad, list) else None,
             "allowed_companies": ac,
             "data_scope_level": current_user.data_scope_level,
-            "visible_tabs": visible_tabs,
-            "visible_tabs_dashboard": visible_tabs_dashboard,
-            "visible_tabs_user_wise": visible_tabs_user_wise,
-            "filter_options": filter_options,
-        }
-    hierarchy_map = build_hierarchy_map(db, None)
+            **_sub,
+        })
+    scope_email = current_user_hierarchy_key or (current_user.employee_email or current_user.email or "").strip() or None
     out = scope_for_user(
         db,
-        current_user.employee_email,
+        scope_email,
         current_user.data_scope_level,
         hierarchy_map=hierarchy_map,
     )
@@ -197,6 +313,11 @@ def get_my_scope(
     if "allowed_companies" not in out:
         out["allowed_companies"] = None
     out["filter_options"] = filter_options
+    out["employee_code_from_list"] = employee_code_from_list
+    out["allowed_employee_emails"] = allowed_employee_emails
+    out["allowed_employee_codes"] = allowed_employee_codes
+    out["direct_employee_emails"] = direct_employee_emails
+    out["direct_employee_codes"] = direct_employee_codes
     return out
 
 

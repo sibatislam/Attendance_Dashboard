@@ -51,13 +51,17 @@ export default function WorkHourLostCostPage() {
   const [selectedMonthsDepartment, setSelectedMonthsDepartment] = useState([]) // for Department tab: multi-select months
   const [departmentChartBy, setDepartmentChartBy] = useState('monthly') // 'weekly' | 'monthly' - chart bars for Department tab
 
-  const { data: weeklyData = [], isLoading: weeklyLoading, isError, error } = useQuery({
+  const { data: weeklyResponse, isLoading: weeklyLoading, isError, error } = useQuery({
     queryKey: ['weekly_dashboard', 'function', 'breakdown_department'],
     queryFn: () => getWeeklyAnalysis('function', 'department'),
     retry: 1,
     staleTime: 5 * 60 * 1000,
     enabled: !scopeFilter.isLoading,
   })
+  // Backend may return { data: list, company_totals_full?, company_wise_full? } for N-1 full company view
+  const weeklyData = Array.isArray(weeklyResponse) ? weeklyResponse : (weeklyResponse?.data ?? [])
+  const companyTotalsFull = weeklyResponse?.company_totals_full ?? null
+  const companyWiseFull = weeklyResponse?.company_wise_full ?? null
 
   const { data: ctcData } = useQuery({
     queryKey: ['ctc-per-hour'],
@@ -367,38 +371,52 @@ export default function WorkHourLostCostPage() {
     return []
   }, [selectedMonthsCompany, months])
 
+  // N-1: full company-wise rows from backend (members, shift, work, lost, cost per month per company)
+  const companyWiseFullFiltered = useMemo(() => {
+    if (!companyWiseFull || !Array.isArray(companyWiseFull) || effectiveCompanyMonths.length === 0) return []
+    const set = new Set(effectiveCompanyMonths)
+    return companyWiseFull.filter(r => set.has(r.month_key))
+  }, [companyWiseFull, effectiveCompanyMonths])
+
+  // N-1: monthly chart series built from full company data (same shape as companyChartSeriesMonthly)
+  const companyChartSeriesMonthlyFromFull = useMemo(() => {
+    if (!companyWiseFullFiltered.length) return []
+    const byCompany = new Map()
+    for (const r of companyWiseFullFiltered) {
+      const company = r.company || 'Unknown'
+      if (!byCompany.has(company)) byCompany.set(company, [])
+      const monthLabel = `${monthNames[r.month] || `Month ${r.month}`} ${r.year}`
+      const lost = Math.round((r.lost || 0) * 100) / 100
+      const shift_hours = Number(r.shift_hours) || 0
+      const lost_pct = shift_hours > 0 ? Math.round((lost / shift_hours) * 10000) / 100 : 0
+      byCompany.get(company).push({
+        monthLabel,
+        year: r.year,
+        month: r.month,
+        members: r.members ?? 0,
+        lost,
+        shift_hours,
+        work_hours: Number(r.work_hours) || 0,
+        cost_bdt: Math.round((r.cost || 0) * 100) / 100,
+        lost_pct,
+        weekLabel: monthLabel,
+      })
+    }
+    const order = ['CIPLC', 'CBL', 'CSEL']
+    const companies = [...new Set(order.filter(c => byCompany.has(c)).concat([...byCompany.keys()].filter(c => !order.includes(c)).sort()))]
+    return companies.map(company => {
+      const data = (byCompany.get(company) || [])
+        .sort((a, b) => (a.year - b.year) || (a.month - b.month))
+      return { companyName: company, data }
+    }).filter(c => c.data.length > 0)
+  }, [companyWiseFullFiltered])
+
   // For Company tab: filter weeklyData by selected month(s)
   const companyTabData = useMemo(() => {
     if (weeklyData.length === 0 || effectiveCompanyMonths.length === 0) return []
     const set = new Set(effectiveCompanyMonths)
     return weeklyData.filter(r => set.has(`${r.year}-${String(r.month).padStart(2, '0')}`))
   }, [weeklyData, effectiveCompanyMonths])
-
-  // Company tab: totals per company (for the card) from period-filtered data
-  const companyWiseTotalsForPeriod = useMemo(() => {
-    if (!companyTabData.length || !hasAnyCtcRate) return []
-    const byCompany = new Map()
-    for (const row of companyTabData) {
-      const groupName = row.group || ''
-      const dashIdx = groupName.indexOf(' - ')
-      const company = dashIdx >= 0 ? groupName.slice(0, dashIdx).trim() : groupName
-      if (!company) continue
-      const lostNum = Number(row.lost) || 0
-      const rate = getRateForGroup(groupName)
-      const costBdt = rate != null ? lostNum * rate : 0
-      byCompany.set(company, (byCompany.get(company) || 0) + costBdt)
-    }
-    const order = ['CIPLC', 'CBL', 'CSEL']
-    return order
-      .filter(c => byCompany.has(c))
-      .map(company => ({ companyName: company, totalCost: byCompany.get(company) }))
-      .concat(
-        Array.from(byCompany.entries())
-          .filter(([c]) => !order.includes(c))
-          .map(([companyName, totalCost]) => ({ companyName, totalCost }))
-          .sort((a, b) => a.companyName.localeCompare(b.companyName))
-      )
-  }, [companyTabData, hasAnyCtcRate, getRateForGroup, ctcByFunction, ctcPerHour])
 
   // Company tab: chart data per company — aggregate by company and week
   const companyChartSeries = useMemo(() => {
@@ -502,6 +520,75 @@ export default function WorkHourLostCostPage() {
       return { companyName: company, data }
     }).filter(c => c.data.length > 0)
   }, [companyTabData, getRateForGroup, ctcByFunction, ctcPerHour])
+
+  // When backend sends full company data (N-1), use it for chart so bars show same as admin. Else override cost only when companyTotalsFull present.
+  const companyChartSeriesMonthlyResolved = useMemo(() => {
+    if (companyChartSeriesMonthlyFromFull.length > 0) return companyChartSeriesMonthlyFromFull
+    if (!companyTotalsFull || !companyChartSeriesMonthly.length) return companyChartSeriesMonthly
+    return companyChartSeriesMonthly.map(s => ({
+      ...s,
+      data: (s.data || []).map(r => {
+        const monthKey = `${r.year}-${String(r.month).padStart(2, '0')}`
+        const fullCost = companyTotalsFull[monthKey] && companyTotalsFull[monthKey][s.companyName]
+        const cost_bdt = fullCost != null ? Math.round(Number(fullCost) * 100) / 100 : (r.cost_bdt ?? 0)
+        return { ...r, cost_bdt }
+      }),
+    }))
+  }, [companyChartSeriesMonthlyFromFull, companyChartSeriesMonthly, companyTotalsFull])
+
+  // Company tab: totals per company (for the card). Use backend full company totals when present (N-1 users) so cards show correct company totals
+  const companyWiseTotalsForPeriod = useMemo(() => {
+    if (companyTotalsFull && effectiveCompanyMonths.length > 0) {
+      const order = ['CIPLC', 'CBL', 'CSEL']
+      const companySet = new Set()
+      effectiveCompanyMonths.forEach(m => {
+        const byCompany = companyTotalsFull[m]
+        if (byCompany && typeof byCompany === 'object') {
+          Object.keys(byCompany).forEach(c => companySet.add(c))
+        }
+      })
+      const byCompanyTotal = {}
+      companySet.forEach(c => {
+        byCompanyTotal[c] = 0
+      })
+      effectiveCompanyMonths.forEach(m => {
+        const byCompany = companyTotalsFull[m]
+        if (byCompany && typeof byCompany === 'object') {
+          Object.entries(byCompany).forEach(([company, cost]) => {
+            byCompanyTotal[company] = (byCompanyTotal[company] || 0) + (Number(cost) || 0)
+          })
+        }
+      })
+      const ordered = order.filter(c => companySet.has(c)).map(companyName => ({
+        companyName,
+        totalCost: Math.round((byCompanyTotal[companyName] || 0) * 100) / 100,
+      }))
+      const rest = [...companySet].filter(c => !order.includes(c)).sort((a, b) => a.localeCompare(b)).map(companyName => ({
+        companyName,
+        totalCost: Math.round((byCompanyTotal[companyName] || 0) * 100) / 100,
+      }))
+      return ordered.concat(rest)
+    }
+    const series = companyChartBy === 'monthly' ? companyChartSeriesMonthly : companyChartSeries
+    if (!series.length || !hasAnyCtcRate) return []
+    const order = ['CIPLC', 'CBL', 'CSEL']
+    return order
+      .filter(c => series.some(s => s.companyName === c))
+      .map(companyName => {
+        const s = series.find(s => s.companyName === companyName)
+        const totalCost = (s?.data || []).reduce((sum, r) => sum + (Number(r.cost_bdt) || 0), 0)
+        return { companyName, totalCost: Math.round(totalCost * 100) / 100 }
+      })
+      .concat(
+        series
+          .filter(s => !order.includes(s.companyName))
+          .map(s => ({
+            companyName: s.companyName,
+            totalCost: Math.round((s.data || []).reduce((sum, r) => sum + (Number(r.cost_bdt) || 0), 0) * 100) / 100,
+          }))
+          .sort((a, b) => a.companyName.localeCompare(b.companyName))
+      )
+  }, [companyTotalsFull, effectiveCompanyMonths, companyChartBy, companyChartSeriesMonthly, companyChartSeries, hasAnyCtcRate])
 
   // Function tab: effective months and data
   const effectiveFunctionMonths = useMemo(() => {
@@ -780,10 +867,41 @@ export default function WorkHourLostCostPage() {
     return functionCalculationBreakdownRows.filter(r => functionFilterSet.has(r.function))
   }, [functionCalculationBreakdownRows, functionFilterSet])
 
-  // Company tab: calculation table rows (one per company × period), respects weekly/monthly choice
-  // Cost = sum over all functions in company of (lost hours × function CTC per hour). Effective rate = cost ÷ lost.
+  // Company tab: summary table rows (one per company × period). N-1 uses full company rows from backend when present.
+  const companyCalculationTableRowsFromFull = useMemo(() => {
+    if (!companyWiseFullFiltered.length) return []
+    return companyWiseFullFiltered.map(r => {
+      const costNum = Number(r.cost) || 0
+      const lostNum = Number(r.lost) || 0
+      const shiftHours = Number(r.shift_hours) || 0
+      const lostPct = shiftHours > 0 ? (lostNum / shiftHours) * 100 : 0
+      const effectiveRate = lostNum > 0 ? costNum / lostNum : null
+      const periodLabel = `${monthNames[r.month] || `Month ${r.month}`} ${r.year}`
+      return {
+        periodLabel,
+        company: r.company || '—',
+        members: r.members ?? 0,
+        shift_hours: r.shift_hours != null ? Number(r.shift_hours).toFixed(2) : '—',
+        work_hours: r.work_hours != null ? Number(r.work_hours).toFixed(2) : '—',
+        lost_pct: `${Number(lostPct).toFixed(2)}%`,
+        lost_hours: r.lost != null ? Number(r.lost).toFixed(2) : '—',
+        _lostNum: lostNum,
+        ctc_per_hour_display: effectiveRate != null ? Number(effectiveRate).toFixed(2) : '—',
+        _ctc_per_hour: effectiveRate,
+        calculation_display: lostNum > 0 && costNum > 0 ? `৳${Number(lostNum).toFixed(2)} × ৳${Number(effectiveRate).toFixed(2)} = ৳${costNum.toLocaleString('en-BD', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—',
+        cost_display: costNum > 0 ? `৳${costNum.toLocaleString('en-BD', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—',
+        _costNum: costNum,
+      }
+    }).sort((a, b) => {
+      const cc = (a.company || '').localeCompare(b.company || '')
+      if (cc !== 0) return cc
+      return (a.periodLabel || '').localeCompare(b.periodLabel || '')
+    })
+  }, [companyWiseFullFiltered])
+
   const companyCalculationTableRows = useMemo(() => {
-    const series = companyChartBy === 'monthly' ? companyChartSeriesMonthly : companyChartSeries
+    if (companyCalculationTableRowsFromFull.length > 0) return companyCalculationTableRowsFromFull
+    const series = companyChartBy === 'monthly' ? companyChartSeriesMonthlyResolved : companyChartSeries
     const rows = []
     for (const { companyName, data } of series) {
       for (const r of data) {
@@ -814,7 +932,7 @@ export default function WorkHourLostCostPage() {
       if (cc !== 0) return cc
       return (a.periodLabel || '').localeCompare(b.periodLabel || '')
     })
-  }, [companyChartBy, companyChartSeries, companyChartSeriesMonthly])
+  }, [companyCalculationTableRowsFromFull, companyChartBy, companyChartSeries, companyChartSeriesMonthlyResolved])
 
   const companyCalculationColumns = [
     { key: 'periodLabel', label: companyChartBy === 'monthly' ? 'Month' : 'Week', sortable: true },
@@ -902,9 +1020,9 @@ export default function WorkHourLostCostPage() {
     return companyChartSeries.filter(c => companyFilterSet.has(c.companyName))
   }, [companyChartSeries, companyFilterSet])
   const companyChartSeriesMonthlyFiltered = useMemo(() => {
-    if (!companyFilterSet) return companyChartSeriesMonthly
-    return companyChartSeriesMonthly.filter(c => companyFilterSet.has(c.companyName))
-  }, [companyChartSeriesMonthly, companyFilterSet])
+    if (!companyFilterSet) return companyChartSeriesMonthlyResolved
+    return companyChartSeriesMonthlyResolved.filter(c => companyFilterSet.has(c.companyName))
+  }, [companyChartSeriesMonthlyResolved, companyFilterSet])
   const companyCalculationTableRowsFiltered = useMemo(() => {
     if (!companyFilterSet) return companyCalculationTableRows
     return companyCalculationTableRows.filter(r => companyFilterSet.has(r.company))

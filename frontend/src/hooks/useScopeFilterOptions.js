@@ -7,7 +7,7 @@ import { getMyScope } from '../lib/api'
  * Use these in menu filters so users only see options they are allowed to access.
  */
 export function useScopeFilterOptions() {
-  const { data, isLoading, isError, error } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['myScope'],
     queryFn: getMyScope,
     staleTime: 2 * 60 * 1000,
@@ -34,6 +34,14 @@ export function useScopeFilterOptions() {
     dataScopeLevel !== 'N-1' &&
     /^N-\d+$/.test(String(dataScopeLevel))
   )
+  /** Employee Code from Employee List (match by Username / Email (Official)). Used to match attendance rows when file has no email column. */
+  const employee_code_from_list = data?.employee_code_from_list ?? null
+  /** For non-admin: self + all subordinates (transitive) from organogram. */
+  const allowed_employee_emails = Array.isArray(data?.allowed_employee_emails) ? data.allowed_employee_emails : []
+  const allowed_employee_codes = Array.isArray(data?.allowed_employee_codes) ? data.allowed_employee_codes : []
+  /** Direct reports only (for User Analytics: show only self + direct subordinates). */
+  const direct_employee_emails = Array.isArray(data?.direct_employee_emails) ? data.direct_employee_emails : []
+  const direct_employee_codes = Array.isArray(data?.direct_employee_codes) ? data.direct_employee_codes : []
   return {
     companies: filterOptions.companies ?? [],
     functions: filterOptions.functions ?? [],
@@ -44,8 +52,14 @@ export function useScopeFilterOptions() {
     visibleTabKeysUserWise,
     dataScopeLevel,
     isDepartmentOnly,
+    employee_code_from_list,
+    allowed_employee_emails,
+    allowed_employee_codes,
+    direct_employee_emails,
+    direct_employee_codes,
     isLoading,
     isError,
     error,
+    refetch,
   }
 }

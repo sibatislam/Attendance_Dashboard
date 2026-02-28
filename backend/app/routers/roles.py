@@ -16,7 +16,7 @@ router = APIRouter()
 ATTENDANCE_ALL_FEATURES = [
     "dashboard", "attendance_recognition", "weekly_dashboard", "user_wise",
     # User Wise sub-menus (independent from standalone menu items)
-    "user_wise_on_time", "user_wise_work_hour", "user_wise_work_hour_lost", "user_wise_work_hour_lost_cost", "user_wise_leave_analysis", "user_wise_od_analysis",
+    "user_wise_on_time", "user_wise_work_hour", "user_wise_work_hour_lost", "user_wise_work_hour_lost_cost", "user_wise_cost_impact", "user_wise_leave_analysis", "user_wise_od_analysis",
     "on_time", "work_hour", "work_hour_lost", "leave_analysis", "od_analysis", "weekly_analysis",
     "upload", "batches", "export",
     # Dashboard-specific tabs

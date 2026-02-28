@@ -5,7 +5,7 @@ from sqlalchemy import select
 from collections import defaultdict
 import re
 
-from ..models import UploadedRow
+from ..models import UploadedFile, UploadedRow
 from ..models_kpi import OnTimeKPI, WorkHourKPI, WorkHourLostKPI, LeaveAnalysisKPI
 
 
@@ -423,3 +423,28 @@ def _calculate_leave_analysis_kpi(db: Session, file_id: int, group_by: str, rows
         )
         db.add(kpi)
 
+
+def run_rebuild_all_kpis(db: Session) -> dict:
+    """
+    Clear all precomputed KPI tables and recalculate for every uploaded file.
+    Call after uploads so KPIs stay in sync (rebuild always when required).
+    Returns dict with total_files and calculated count.
+    """
+    import logging
+    db.query(OnTimeKPI).delete()
+    db.query(WorkHourKPI).delete()
+    db.query(WorkHourLostKPI).delete()
+    db.query(LeaveAnalysisKPI).delete()
+    db.commit()
+
+    files = db.query(UploadedFile).all()
+    calculated_count = 0
+    for file in files:
+        try:
+            calculate_kpis_for_file(db, file.id)
+            calculated_count += 1
+        except Exception as e:
+            logging.getLogger(__name__).warning(
+                "KPI calculation failed for file id=%s: %s", file.id, e
+            )
+    return {"total_files": len(files), "calculated": calculated_count}

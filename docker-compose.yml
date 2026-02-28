@@ -60,8 +60,8 @@ services:
   # Frontend (React/Vite)
   frontend:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: frontend/Dockerfile
       # VITE_API_BASE is not set - frontend uses dynamic hostname detection at runtime
       # This allows it to work from any IP address (localhost, network IP, etc.)
     image: attendance-dashboard-frontend:latest

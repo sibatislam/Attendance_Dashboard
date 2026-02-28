@@ -3,14 +3,23 @@ from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Backgro
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 
-from ..db import get_db
+from ..db import get_db, SessionLocal
 from ..models import UploadedFile, UploadedRow
 from ..schemas import UploadResponseItem
 from ..services.parser import read_file_preserve_text
-from ..services.kpi_calculator import calculate_kpis_for_file
+from ..services.kpi_calculator import run_rebuild_all_kpis
 
 
 router = APIRouter()
+
+
+def _background_rebuild_all_kpis() -> None:
+    """Run full KPI rebuild in background with its own DB session (for use after upload)."""
+    db = SessionLocal()
+    try:
+        run_rebuild_all_kpis(db)
+    finally:
+        db.close()
 
 
 @router.post("", response_model=List[UploadResponseItem])
@@ -42,17 +51,6 @@ async def upload_files(
             db.commit()
             db.refresh(file_rec)
             
-            # Calculate KPIs for this file in background
-            if background_tasks:
-                background_tasks.add_task(calculate_kpis_for_file, db, file_rec.id)
-            else:
-                # If no background tasks, calculate synchronously
-                try:
-                    calculate_kpis_for_file(db, file_rec.id)
-                except Exception as calc_err:
-                    print(f"Warning: KPI calculation failed for file {file_rec.id}: {calc_err}")
-                    # Don't fail the upload if KPI calculation fails
-            
         except SQLAlchemyError as db_err:
             db.rollback()
             raise HTTPException(status_code=500, detail=f"Database error for {uf.filename}: {db_err}")
@@ -68,6 +66,10 @@ async def upload_files(
                 total_rows=len(rows),
             )
         )
+
+    # Rebuild all KPIs in background so precomputed tables stay in sync (rebuild always when required)
+    if background_tasks and created_items:
+        background_tasks.add_task(_background_rebuild_all_kpis)
 
     return created_items
 

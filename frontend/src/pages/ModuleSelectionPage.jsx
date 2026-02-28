@@ -90,7 +90,13 @@ export default function ModuleSelectionPage() {
       })
 
   return (
-    <div className="h-screen flex flex-col relative overflow-hidden bg-gradient-to-br from-slate-50 via-gray-50 to-zinc-100">
+    <div className="h-screen flex flex-col relative overflow-hidden">
+      {/* Background image */}
+      <div
+        className="absolute inset-0 bg-cover bg-center bg-no-repeat"
+        style={{ backgroundImage: 'url(/background.jpg)' }}
+      />
+      <div className="absolute inset-0 bg-gradient-to-br from-white/40 via-white/30 to-white/40" aria-hidden />
       {/* Do's and Don'ts modal */}
       {showDosDonts && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setShowDosDonts(false)}>
@@ -110,6 +116,17 @@ export default function ModuleSelectionPage() {
               </button>
             </div>
             <div className="px-6 py-5 overflow-y-auto flex-1 text-sm">
+              <div className="mb-5 flex flex-col items-center">
+                <h4 className="font-semibold text-gray-800 mb-2 text-center">Video: Addressing Attendance Issues — Becoming a Highly Effective Leader</h4>
+                <video
+                  src="/video/Addressing%20Attendance%20Issues%20-%20Becoming%20a%20Highly%20Effective%20Leader%20(1080p%2C%20h264%2C%20youtube).mp4"
+                  controls
+                  className="w-full max-w-2xl rounded-lg shadow-md mx-auto block"
+                  preload="metadata"
+                >
+                  Your browser does not support the video tag.
+                </video>
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-5">
                 <section>
                   <h4 className="flex items-center gap-2 font-semibold text-green-700 mb-2">✅ Do</h4>
@@ -210,7 +227,7 @@ export default function ModuleSelectionPage() {
           <div className="flex items-center gap-3">
             <button
               onClick={() => navigate('/profile', { state: { from: '/modules' } })}
-              className="px-4 py-2 text-sm backdrop-blur-sm bg-white/30 border border-gray-300/50 text-gray-700 rounded-lg hover:bg-white/50 transition-all shadow-lg flex items-center gap-2"
+              className="px-4 py-2 text-sm bg-indigo-100 border border-indigo-200 text-indigo-800 rounded-lg hover:bg-indigo-200 transition-all shadow-lg flex items-center gap-2"
             >
               <span className="lnr lnr-user"></span>
               Profile
@@ -218,9 +235,9 @@ export default function ModuleSelectionPage() {
             {user?.role === 'admin' && (
               <button
                 onClick={() => navigate('/admin/users')}
-                className="px-4 py-2 text-sm backdrop-blur-sm bg-white/30 border border-gray-300/50 text-gray-700 rounded-lg hover:bg-white/50 transition-all shadow-lg"
+                className="px-4 py-2 text-sm bg-slate-100 border border-slate-300 text-slate-800 rounded-lg hover:bg-slate-200 transition-all shadow-lg"
               >
-                User & role management
+                User & Role Management
               </button>
             )}
             <button

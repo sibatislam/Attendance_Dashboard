@@ -35,7 +35,8 @@ export default function LoginPage() {
       navigate('/modules')
     } catch (err) {
       console.error('Login error:', err)
-      const errorMsg = err.response?.data?.detail || err.message || 'Login failed. Please check your credentials.'
+      const detail = err.response?.data?.detail
+      const errorMsg = typeof detail === 'string' ? detail : (err.response?.status === 401 ? 'Invalid username or password.' : err.message || 'Login failed. Please try again.')
       setError(errorMsg)
     } finally {
       setIsLoading(false)

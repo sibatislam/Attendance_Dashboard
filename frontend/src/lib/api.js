@@ -46,10 +46,13 @@ api.interceptors.response.use(
       console.error('[API] Cannot reach backend at', API_BASE, '— is it running? Start with: scripts\\windows\\run_backend.bat')
     }
     if (error.response?.status === 401) {
-      // Token expired or invalid
-      localStorage.removeItem('token')
-      localStorage.removeItem('user')
-      window.location.href = '/login'
+      // Don't redirect if this was the login request — let the login page show the error
+      const isLoginRequest = error.config?.url?.includes('/auth/login') || error.config?.url?.includes('/login')
+      if (!isLoginRequest) {
+        localStorage.removeItem('token')
+        localStorage.removeItem('user')
+        window.location.href = '/login'
+      }
     }
     return Promise.reject(error)
   }
@@ -435,6 +438,13 @@ export async function deleteEmployeeFiles(ids) {
 export async function getEmployeeHierarchy(employeeFileId = null) {
   const params = employeeFileId != null ? { employee_file_id: employeeFileId } : {}
   const { data } = await api.get('/employee/files/hierarchy', { params })
+  return data
+}
+
+/** Organogram: supervisor and their direct subordinates from Employee List (admin). */
+export async function getOrganogram(employeeFileId = null) {
+  const params = employeeFileId != null ? { employee_file_id: employeeFileId } : {}
+  const { data } = await api.get('/employee/files/organogram', { params })
   return data
 }
 

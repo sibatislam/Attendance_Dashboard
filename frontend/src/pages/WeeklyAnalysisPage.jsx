@@ -44,11 +44,12 @@ export default function WeeklyAnalysisPage() {
   const current = tabs.find(t => t.key === active)
   const baseKey = current?.base || 'function'
   const useDepartmentBreakdown = active === 'department' || active === 'department_chart'
-  const { data = [], isLoading, isError, error } = useQuery({ 
-    queryKey: ['weekly', baseKey, useDepartmentBreakdown ? 'breakdown_department' : null], 
-    queryFn: () => getWeeklyAnalysis(baseKey, useDepartmentBreakdown ? 'department' : null), 
-    retry: 0 
+  const { data: weeklyResponse, isLoading, isError, error } = useQuery({
+    queryKey: ['weekly', baseKey, useDepartmentBreakdown ? 'breakdown_department' : null],
+    queryFn: () => getWeeklyAnalysis(baseKey, useDepartmentBreakdown ? 'department' : null),
+    retry: 0
   })
+  const data = Array.isArray(weeklyResponse) ? weeklyResponse : (weeklyResponse?.data ?? [])
   const [selectedMonth, setSelectedMonth] = useState('')
   const [selectedWeek, setSelectedWeek] = useState('')
   const [selectedFunctions, setSelectedFunctions] = useState([])

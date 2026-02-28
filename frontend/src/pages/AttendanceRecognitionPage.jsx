@@ -1,5 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import html2canvas from 'html2canvas'
+import { jsPDF } from 'jspdf'
 import { getOnTime } from '../lib/api'
 
 // Balloon positions (percent) and colors; popDelay is assigned randomly when celebration starts
@@ -147,7 +149,9 @@ function toMonthLabel(m) {
 export default function AttendanceRecognitionPage() {
   const [selectedMonth, setSelectedMonth] = useState('')
   const [showBalloonCelebration, setShowBalloonCelebration] = useState(false)
+  const [exportingPdf, setExportingPdf] = useState(false)
   const hasCelebrated = useRef(false)
+  const pdfContentRef = useRef(null)
 
   const { data = [], isLoading, isError, error } = useQuery({
     queryKey: ['kpi', 'function'],
@@ -197,6 +201,59 @@ export default function AttendanceRecognitionPage() {
     const delays = shufflePopDelays()
     return BALLOON_BASE.map((b, i) => ({ ...b, popDelay: delays[i] }))
   }, [showBalloonCelebration])
+
+  const handleExportPdf = async () => {
+    const el = pdfContentRef.current
+    if (!el || exportingPdf) return
+    setExportingPdf(true)
+    try {
+      // Force visibility for capture: override opacity-0 and gradient text so html2canvas sees content
+      el.classList.add('pdf-capture-visible')
+      const prevWidth = el.style.width
+      const prevMinWidth = el.style.minWidth
+      el.style.width = `${Math.max(el.scrollWidth, 800)}px`
+      el.style.minWidth = '800px'
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+      const canvas = await html2canvas(el, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff',
+      })
+      el.classList.remove('pdf-capture-visible')
+      el.style.width = prevWidth
+      el.style.minWidth = prevMinWidth
+      const imgData = canvas.toDataURL('image/png', 1.0)
+      const pdf = new jsPDF({
+        orientation: canvas.width > canvas.height ? 'landscape' : 'portrait',
+        unit: 'mm',
+        format: 'a4',
+      })
+      const pageW = pdf.internal.pageSize.getWidth()
+      const pageH = pdf.internal.pageSize.getHeight()
+      const aspect = canvas.height / canvas.width
+      let w = pageW
+      let h = pageW * aspect
+      if (h > pageH) {
+        h = pageH
+        w = pageH / aspect
+      }
+      const x = (pageW - w) / 2
+      const y = (pageH - h) / 2
+      pdf.addImage(imgData, 'PNG', x, y, w, h)
+      const monthLabel = toMonthLabel(effectiveMonthKey) || 'Report'
+      pdf.save(`Attendance-Recognition-${monthLabel.replace(/\s+/g, '-')}.pdf`)
+    } catch (e) {
+      console.error('PDF export failed:', e)
+      el?.classList?.remove('pdf-capture-visible')
+      if (el) {
+        el.style.width = ''
+        el.style.minWidth = ''
+      }
+    } finally {
+      setExportingPdf(false)
+    }
+  }
 
   return (
     <div className="space-y-6 attendance-recognition-page">
@@ -270,6 +327,20 @@ export default function AttendanceRecognitionPage() {
           animation: particle-burst 0.85s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
           opacity: 0;
         }
+        /* Force visibility when capturing for PDF (opacity-0 and bg-clip-text break html2canvas) */
+        .pdf-capture-visible,
+        .pdf-capture-visible * {
+          opacity: 1 !important;
+          animation: none !important;
+        }
+        .pdf-capture-visible [class*="bg-clip-text"] {
+          color: #4f46e5 !important;
+          -webkit-text-fill-color: #4f46e5 !important;
+          background: none !important;
+        }
+        .pdf-capture-visible [data-pdf-hide] {
+          display: none !important;
+        }
       `}</style>
 
       {/* Balloon pop celebration - real balloon shapes (teardrop + knot + string), then pop with particles */}
@@ -335,6 +406,7 @@ export default function AttendanceRecognitionPage() {
         </div>
       )}
 
+      <div ref={pdfContentRef} className="space-y-6">
       <div className="celebrate-in opacity-0 rounded-xl p-4 bg-gradient-to-r from-indigo-500/10 via-purple-500/10 to-pink-500/10 border border-indigo-200/50" style={{ animationDelay: '0.1s' }}>
         <h2 className="text-2xl font-bold bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 bg-clip-text text-transparent">
           Attendance and Punctuality Recognition
@@ -354,6 +426,25 @@ export default function AttendanceRecognitionPage() {
             <option key={m} value={m}>{toMonthLabel(m)}</option>
           ))}
         </select>
+        <button
+          type="button"
+          data-pdf-hide
+          onClick={handleExportPdf}
+          disabled={exportingPdf || isLoading || isError || !effectiveMonthKey || monthRows.length === 0}
+          className="ml-auto px-4 py-2 rounded-lg border-2 border-indigo-300 bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+        >
+          {exportingPdf ? (
+            <>
+              <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              Exporting…
+            </>
+          ) : (
+            <>
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+              Export as PDF
+            </>
+          )}
+        </button>
       </div>
 
       {isLoading && <div className="card p-6 text-center text-gray-500">Loading...</div>}
@@ -424,6 +515,7 @@ export default function AttendanceRecognitionPage() {
           </div>
         </>
       )}
+      </div>
     </div>
   )
 }
